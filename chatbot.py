@@ -14,6 +14,11 @@ from langchain_google_genai import GoogleGenerativeAI
 import sqlalchemy
 from urllib.parse import quote_plus
 import logging
+from tools.db import DatabaseManager   # or wherever db_manager is defined
+
+# Initialize db_manager in session_state if not already present
+if "db_manager" not in st.session_state:
+    st.session_state.db_manager = DatabaseManager()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -496,3 +501,4 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
