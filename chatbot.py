@@ -116,25 +116,32 @@ class DatabaseManager:
         except Exception as e:
             return False, f"Connection failed: {str(e)}"
     
-    def connect_to_database(self, server, database, username, password):
-        """Connect to Azure SQL Database with driver auto-detection"""
-        try:
-            # First, check available drivers
-            available_drivers = self.get_available_drivers()
-            if not available_drivers:
-                return False, "No SQL Server ODBC drivers found. Please install Microsoft ODBC Driver for SQL Server."
-            
-            self.connection_string, used_driver = self.create_connection_string(server, database, username, password)
-            success, message = self.test_connection(self.connection_string)
-            
-            if success:
-                self.db = SQLDatabase.from_uri(self.connection_string)
-                return True, f"Successfully connected using driver: {used_driver}"
-            else:
-                return False, message
-        except Exception as e:
-            logger.error(f"Database connection error: {str(e)}")
-            return False, f"Connection error: {str(e)}"
+def connect_to_database(self, server, database, username, password):
+    """Connect to Azure SQL Database with driver auto-detection"""
+    try:
+        # First, check available drivers
+        available_drivers = self.get_available_drivers()
+        if not available_drivers:
+            return False, "No SQL Server ODBC drivers found. Please install Microsoft ODBC Driver for SQL Server."
+        
+        self.connection_string, used_driver = self.create_connection_string(server, database, username, password)
+        success, message = self.test_connection(self.connection_string)
+        
+        if success:
+            # Load ALL schemas instead of default
+            self.db = SQLDatabase.from_uri(
+                self.connection_string,
+                include_tables=None,         # None = include all tables
+                sample_rows_in_table_info=3, # optional: include sample rows for better context
+                schema="%"                   # <-- this ensures ALL schemas are included
+            )
+            return True, f"Successfully connected using driver: {used_driver}"
+        else:
+            return False, message
+    except Exception as e:
+        logger.error(f"Database connection error: {str(e)}")
+        return False, f"Connection error: {str(e)}"
+
     
     def get_table_info(self):
         """Get information about database tables"""
@@ -488,7 +495,4 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True
-
 )
-
-
