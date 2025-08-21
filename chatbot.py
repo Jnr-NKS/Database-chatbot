@@ -202,7 +202,7 @@ class SQLAgent:
                 verbose=True,
                 agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 handle_parsing_errors=True,
-                max_iterations=3,
+                max_iterations=10,
                 early_stopping_method="force"
             )
             
@@ -489,6 +489,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 
 
 
