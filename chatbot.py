@@ -70,13 +70,10 @@ class DatabaseManager:
     def create_connection_string(self, server, database, username, password, driver=None):
         """Create Azure SQL Database connection string with driver detection"""
         if not driver:
-            # Try to find the best available driver
             available_drivers = self.get_available_drivers()
-            
             if not available_drivers:
-                raise Exception("No SQL Server ODBC drivers found. Please install Microsoft ODBC Driver for SQL Server.")
+                raise Exception("No SQL Server ODBC drivers found.")
             
-            # Prefer newer drivers
             preferred_drivers = [
                 "ODBC Driver 18 for SQL Server",
                 "ODBC Driver 17 for SQL Server",
@@ -84,17 +81,14 @@ class DatabaseManager:
                 "SQL Server Native Client 11.0",
                 "SQL Server"
             ]
-            
             driver = None
             for preferred in preferred_drivers:
                 if preferred in available_drivers:
                     driver = preferred
                     break
-            
             if not driver:
-                driver = available_drivers[0]  # Use the first available driver
+                driver = available_drivers[0]
         
-        # Create connection string with proper parameters for Azure SQL
         connection_string = (
             f"mssql+pyodbc://{quote_plus(username)}:{quote_plus(password)}"
             f"@{server}/{database}?"
@@ -103,7 +97,6 @@ class DatabaseManager:
             f"Connection+Timeout=30&"
             f"Encrypt=yes"
         )
-        
         return connection_string, driver
     
     def test_connection(self, connection_string):
@@ -116,32 +109,31 @@ class DatabaseManager:
         except Exception as e:
             return False, f"Connection failed: {str(e)}"
     
-def connect_to_database(self, server, database, username, password):
-    """Connect to Azure SQL Database with driver auto-detection"""
-    try:
-        # First, check available drivers
-        available_drivers = self.get_available_drivers()
-        if not available_drivers:
-            return False, "No SQL Server ODBC drivers found. Please install Microsoft ODBC Driver for SQL Server."
-        
-        self.connection_string, used_driver = self.create_connection_string(server, database, username, password)
-        success, message = self.test_connection(self.connection_string)
-        
-        if success:
-            # Load ALL schemas instead of default
-            self.db = SQLDatabase.from_uri(
-                self.connection_string,
-                include_tables=None,         # None = include all tables
-                sample_rows_in_table_info=3, # optional: include sample rows for better context
-                schema="%"                   # <-- this ensures ALL schemas are included
+    def connect_to_database(self, server, database, username, password):
+        """Connect to Azure SQL Database with driver auto-detection"""
+        try:
+            available_drivers = self.get_available_drivers()
+            if not available_drivers:
+                return False, "No SQL Server ODBC drivers found."
+            
+            self.connection_string, used_driver = self.create_connection_string(
+                server, database, username, password
             )
-            return True, f"Successfully connected using driver: {used_driver}"
-        else:
-            return False, message
-    except Exception as e:
-        logger.error(f"Database connection error: {str(e)}")
-        return False, f"Connection error: {str(e)}"
-
+            success, message = self.test_connection(self.connection_string)
+            
+            if success:
+                self.db = SQLDatabase.from_uri(
+                    self.connection_string,
+                    include_tables=None,
+                    sample_rows_in_table_info=3,
+                    schema="%"  # load all schemas
+                )
+                return True, f"Successfully connected using driver: {used_driver}"
+            else:
+                return False, message
+        except Exception as e:
+            logger.error(f"Database connection error: {str(e)}")
+            return False, f"Connection error: {str(e)}"
     
     def get_table_info(self):
         """Get information about database tables"""
@@ -151,6 +143,7 @@ def connect_to_database(self, server, database, username, password):
             except Exception as e:
                 return f"Error getting table info: {str(e)}"
         return "No database connection"
+
 
 class SQLAgent:
     def __init__(self, gemini_api_key):
@@ -496,5 +489,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 
 
