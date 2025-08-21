@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import pyodbc
-from langchain_community.utilities import SQLDatabase
+from langchain_community.utilities.sql_database import SQLDatabase
 from langchain.agents import create_sql_agent
 from langchain.agents.agent_toolkits import SQLDatabaseToolkit
 from langchain.llms import GooglePalm
@@ -490,3 +490,4 @@ st.markdown(
     unsafe_allow_html=True
 
 )
+
