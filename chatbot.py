@@ -125,7 +125,8 @@ class DatabaseManager:
                 self.db = SQLDatabase.from_uri(
                     self.connection_string,
                     include_tables=None,
-                    sample_rows_in_table_info=3
+                    sample_rows_in_table_info=3,
+                    schema="%"
                     
                 )
                 return True, f"Successfully connected using driver: {used_driver}"
@@ -481,3 +482,4 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
