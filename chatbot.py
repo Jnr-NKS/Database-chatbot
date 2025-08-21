@@ -175,18 +175,28 @@ class SQLAgent:
             # Custom prompt for better SQL generation
             custom_prompt = """
             You are an expert SQL assistant. Given an input question, create a syntactically correct SQL query to run.
-
-            - Always use fully qualified table names with schema (e.g., SalesLT.SalesOrderDetail).
-            - Never replace dots in table names with underscores.
-            - Unless specified, return at most 10 rows.
-            - Do not use SELECT *.
-            - Wrap column names in square brackets [ ].
-            - Only use the columns and tables shown in the schema info.
-
+            
+            Unless the user specifies in the question a specific number of examples to obtain, query for at most 10 results using LIMIT or TOP clause.
+            Always use fully qualified table names with schema (e.g., SalesLT.SalesOrderDetail).
+            Never replace dots in table names with underscores.
+            Never query for all columns from a table. You must query only the columns that are needed to answer the question.
+            Wrap each column name in square brackets like [column_name] to handle spaces and special characters.
+            Pay attention to use only the column names you can see in the tables below. Be careful to not query for columns that do not exist.
+            Also, pay attention to which column is in which table.
+            
+            Use the following format:
+            
+            Question: "Question here"
+            SQLQuery: "SQL Query to run"
+            SQLResult: "Result of the SQLQuery"
+            Answer: "Final answer here"
+            
+            Only use the following tables:
+            {table_info}
+            
             Question: {input}
             {agent_scratchpad}
             """
-
             
             # Create agent
             self.agent = create_sql_agent(
@@ -482,4 +492,3 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
