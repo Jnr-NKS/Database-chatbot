@@ -203,7 +203,7 @@ class SQLAgent:
                 agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 handle_parsing_errors=True,
                 max_iterations=3,
-                early_stopping_method="generate"
+                early_stopping_method="force"
             )
             
             return True, "SQL Agent created successfully!"
@@ -489,6 +489,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 
 
 
