@@ -157,7 +157,7 @@ class SQLAgent:
         try:
             genai.configure(api_key=self.gemini_api_key)
             self.llm = GoogleGenerativeAI(
-                model="gemini-pro",
+                model="gemini-1.5-flash",
                 google_api_key=self.gemini_api_key,
                 temperature=0,
                 convert_system_message_to_human=True
@@ -490,4 +490,5 @@ st.markdown(
     unsafe_allow_html=True
 
 )
+
 
