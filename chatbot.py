@@ -16,73 +16,46 @@ from urllib.parse import quote_plus
 import logging
 from sqlalchemy import text, inspect
 
-# Custom SQL Database class for better SQL Server schema handling
-# Custom SQL Database class for better SQL Server schema handling
+# --- Custom SQL Server Database that loads ALL schemas ---
+
 class SQLServerDatabase(SQLDatabase):
-    """Custom SQLDatabase that loads all schemas and tables"""
+    """Custom SQLDatabase that loads tables from all schemas (not just dbo)."""
 
     def get_usable_table_names(self):
-        """Get all table names including schema prefixes"""
+        """Return all tables across all schemas (except system schemas)."""
         inspector = inspect(self._engine)
         table_names = []
-
-        # Get tables from all schemas
         for schema in inspector.get_schema_names():
-            if schema.lower() not in ['information_schema', 'sys']:  # Skip system schemas
+            if schema.lower() not in ["information_schema", "sys"]:
                 for table in inspector.get_table_names(schema=schema):
-                    table_names.append(f"{schema}.{table}")
-
+                    table_names.append(f"{schema}.{table}")  # Always prefix with schema
         return table_names
 
     def get_table_info(self, table_names=None):
-        """Get CREATE TABLE–style schema info for all schemas/tables"""
+        """Return schema-qualified table info for LangChain."""
+        inspector = inspect(self._engine)
         if table_names is None:
             table_names = self.get_usable_table_names()
 
-        inspector = inspect(self._engine)
         tables_info = []
-
         for table_name in table_names:
             try:
-                if '.' in table_name:
-                    schema, table = table_name.split('.', 1)
+                if "." in table_name:
+                    schema, table = table_name.split(".", 1)
                 else:
-                    schema = 'dbo'
-                    table = table_name
-
+                    schema, table = "dbo", table_name
                 columns = inspector.get_columns(table, schema=schema)
-                pk_constraint = inspector.get_pk_constraint(table, schema=schema)
-                fks = inspector.get_foreign_keys(table, schema=schema)
 
                 table_info = f"CREATE TABLE {schema}.{table} (\n"
-                col_lines = []
+                col_defs = []
                 for col in columns:
-                    col_line = f"  [{col['name']}] {col['type']}"
-                    if not col.get("nullable", True):
-                        col_line += " NOT NULL"
-                    if col.get("default") is not None:
-                        col_line += f" DEFAULT {col['default']}"
-                    col_lines.append(col_line)
-                table_info += ",\n".join(col_lines)
-
-                # Add PK
-                if pk_constraint and pk_constraint.get("constrained_columns"):
-                    table_info += f",\n  PRIMARY KEY ({', '.join(pk_constraint['constrained_columns'])})"
-
-                # Add FKs
-                for fk in fks:
-                    table_info += f",\n  FOREIGN KEY ({', '.join(fk['constrained_columns'])}) " \
-                                  f"REFERENCES {fk['referred_schema']}.{fk['referred_table']} " \
-                                  f"({', '.join(fk['referred_columns'])})"
-
-                table_info += "\n);"
+                    col_defs.append(f"  [{col['name']}] {col['type']}")
+                table_info += ",\n".join(col_defs) + "\n)"
                 tables_info.append(table_info)
 
             except Exception as e:
-                tables_info.append(f"-- Error getting info for {table_name}: {str(e)}")
-
+                tables_info.append(f"-- Error getting info for {table_name}: {e}")
         return "\n\n".join(tables_info)
-
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
