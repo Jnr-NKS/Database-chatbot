@@ -27,30 +27,188 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# Enhanced Custom CSS for better styling and alignment
 st.markdown("""
 <style>
+    /* Import Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    
+    /* Global styles */
     .main-header {
-        font-size: 3rem;
+        font-family: 'Inter', sans-serif;
+        font-size: 2.5rem;
+        font-weight: 700;
         color: #1f77b4;
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 1.5rem;
+        padding: 1rem 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
     }
+    
+    .sub-header {
+        font-family: 'Inter', sans-serif;
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #2c3e50;
+        margin: 1.5rem 0 1rem 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    /* Sidebar styling */
+    .sidebar-header {
+        font-family: 'Inter', sans-serif;
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: #2c3e50;
+        margin-bottom: 1rem;
+        padding: 0.5rem 0;
+        border-bottom: 2px solid #e74c3c;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    /* Card-like containers */
+    .card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        border: 1px solid #e0e6ed;
+        margin-bottom: 1.5rem;
+    }
+    
+    /* Alert styling */
     .stAlert {
-        margin-top: 1rem;
+        margin: 1rem 0;
+        border-radius: 8px;
     }
+    
+    /* SQL query display */
     .sql-query {
-        background-color: #f0f2f6;
+        background: #f8f9fa;
+        padding: 1.2rem;
+        border-radius: 8px;
+        border-left: 4px solid #28a745;
+        font-family: 'Consolas', 'Monaco', monospace;
+        font-size: 0.9rem;
+        line-height: 1.4;
+        margin: 1rem 0;
+    }
+    
+    /* Chat history styling */
+    .chat-question {
+        background: #e3f2fd;
         padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #1f77b4;
+        border-radius: 8px;
+        border-left: 4px solid #2196f3;
+        margin-bottom: 1rem;
+        font-weight: 500;
+    }
+    
+    .chat-answer {
+        background: #f1f8e9;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #4caf50;
+        margin-bottom: 1rem;
+    }
+    
+    /* Button styling */
+    .stButton > button {
+        font-family: 'Inter', sans-serif;
+        font-weight: 500;
+        border-radius: 8px;
+        border: none;
+        padding: 0.5rem 1rem;
+        transition: all 0.3s ease;
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    
+    /* Input field styling */
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea {
+        font-family: 'Inter', sans-serif;
+        border-radius: 8px;
+        border: 1px solid #ddd;
+    }
+    
+    /* Connection status */
+    .connection-status {
+        padding: 0.8rem;
+        border-radius: 8px;
+        text-align: center;
+        font-weight: 600;
+        margin: 1rem 0;
+    }
+    
+    .connected {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+    
+    .disconnected {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+    
+    /* Example questions */
+    .example-question {
+        background: #fff3cd;
+        padding: 0.8rem;
+        border-radius: 6px;
+        border-left: 3px solid #ffc107;
+        margin: 0.5rem 0;
+        font-family: 'Inter', sans-serif;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    
+    .example-question:hover {
+        background: #fff8dc;
+        transform: translateX(5px);
+    }
+    
+    /* Footer */
+    .footer {
+        text-align: center;
+        color: #6c757d;
+        font-style: italic;
+        margin-top: 3rem;
+        padding: 2rem 0;
+        border-top: 1px solid #e9ecef;
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+        .main-header {
+            font-size: 2rem;
+        }
+        .card {
+            padding: 1rem;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Title
+# Title with better formatting
 st.markdown('<h1 class="main-header">🤖 Chat With Your Azure SQL Database</h1>', unsafe_allow_html=True)
-st.markdown("---")
+st.markdown("""
+<div style="text-align: center; color: #6c757d; font-size: 1.1rem; margin-bottom: 2rem;">
+    Ask questions in natural language and get insights from your database
+</div>
+""", unsafe_allow_html=True)
 
 class DatabaseManager:
     def __init__(self):
@@ -89,32 +247,80 @@ class DatabaseManager:
             if not driver:
                 driver = available_drivers[0]
         
+        # Enhanced connection string with better timeout and SSL settings
         connection_string = (
             f"mssql+pyodbc://{quote_plus(username)}:{quote_plus(password)}"
-            f"@{server}/{database}?"
+            f"@{server}:1433/{database}?"
             f"driver={quote_plus(driver)}&"
-            f"TrustServerCertificate=yes&"
-            f"Connection+Timeout=30&"
-            f"Encrypt=yes"
+            f"Encrypt=yes&"
+            f"TrustServerCertificate={'yes' if getattr(self, 'trust_cert', False) else 'no'}&"
+            f"Connection+Timeout={getattr(self, 'timeout', 60)}&"
+            f"Login_Timeout={getattr(self, 'timeout', 60)}&"
+            f"ConnectRetryCount=3&"
+            f"ConnectRetryInterval=10"
         )
         return connection_string, driver
     
     def test_connection(self, connection_string):
-        """Test database connection"""
+        """Test database connection with enhanced error handling"""
         try:
-            engine = sqlalchemy.create_engine(connection_string)
+            # Create engine with additional pool settings
+            engine = sqlalchemy.create_engine(
+                connection_string,
+                pool_pre_ping=True,
+                pool_recycle=3600,
+                connect_args={
+                    "timeout": 60,
+                    "autocommit": True
+                }
+            )
+            
             with engine.connect() as conn:
                 conn.execute(sqlalchemy.text("SELECT 1"))
             return True, "Connection successful!"
         except Exception as e:
-            return False, f"Connection failed: {str(e)}"
+            error_msg = str(e)
+            
+            # Provide specific troubleshooting based on error type
+            if "timeout" in error_msg.lower():
+                troubleshooting = """
+                
+**Troubleshooting Timeout Issues:**
+1. Check if your server name is correct (should end with .database.windows.net)
+2. Verify firewall settings allow your IP address
+3. Ensure you're using port 1433
+4. Check if the database is online and accessible
+                """
+            elif "login" in error_msg.lower():
+                troubleshooting = """
+                
+**Troubleshooting Login Issues:**
+1. Verify username and password are correct
+2. Check if the user has permission to access the database
+3. Ensure the database name is correct
+                """
+            elif "ssl" in error_msg.lower() or "certificate" in error_msg.lower():
+                troubleshooting = """
+                
+**Troubleshooting SSL/Certificate Issues:**
+1. Try connecting with TrustServerCertificate=yes
+2. Update your ODBC driver to the latest version
+                """
+            else:
+                troubleshooting = ""
+            
+            return False, f"Connection failed: {error_msg}{troubleshooting}"
     
-    def connect_to_database(self, server, database, username, password):
-        """Connect to Azure SQL Database with driver auto-detection"""
+    def connect_to_database(self, server, database, username, password, trust_cert=False, timeout=60):
+        """Connect to Azure SQL Database with enhanced configuration"""
         try:
             available_drivers = self.get_available_drivers()
             if not available_drivers:
                 return False, "No SQL Server ODBC drivers found."
+            
+            # Store timeout for use in connection string
+            self.timeout = timeout
+            self.trust_cert = trust_cert
             
             self.connection_string, used_driver = self.create_connection_string(
                 server, database, username, password
@@ -241,80 +447,141 @@ if 'connected' not in st.session_state:
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
-# Sidebar for configuration
+# Enhanced Sidebar with better formatting
 with st.sidebar:
-    st.header("🔧 Configuration")
+    st.markdown('<div class="sidebar-header">🔧 Configuration</div>', unsafe_allow_html=True)
     
-    # Gemini API Key
-    gemini_api_key = st.text_input(
-        "Gemini API Key",
-        type="password",
-        help="Enter your Google Gemini API key"
-    )
+    # Gemini API Key section
+    with st.container():
+        st.markdown("**🔑 API Configuration**")
+        gemini_api_key = st.text_input(
+            "Gemini API Key",
+            type="password",
+            help="Enter your Google Gemini API key",
+            placeholder="Enter your API key..."
+        )
     
     st.markdown("---")
-    st.header("🔗 Database Connection")
     
-    # Database connection parameters
-    server = st.text_input(
-        "Server Name",
-        placeholder="your-server.database.windows.net",
-        help="Azure SQL Server name"
+    # Database connection section
+    st.markdown('<div class="sidebar-header">🔗 Database Connection</div>', unsafe_allow_html=True)
+    
+    with st.container():
+        server = st.text_input(
+            "🖥️ Server Name",
+            placeholder="your-server.database.windows.net",
+            help="Azure SQL Server name (must end with .database.windows.net)"
+        )
+        
+        database = st.text_input(
+            "🗄️ Database Name",
+            placeholder="your-database-name",
+            help="Name of your Azure SQL database"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            username = st.text_input(
+                "👤 Username",
+                placeholder="username",
+                help="Database username"
+            )
+        with col2:
+            password = st.text_input(
+                "🔒 Password",
+                type="password",
+                help="Database password"
+            )
+    
+    # Connection troubleshooting tips
+    with st.expander("🔧 Connection Troubleshooting", expanded=False):
+        st.markdown("""
+        **Common Issues & Solutions:**
+        
+        **🔥 Firewall Issues:**
+        - Add your IP address to Azure SQL firewall rules
+        - Enable "Allow Azure services" in firewall settings
+        
+        **🌐 Server Name Format:**
+        - Must be: `your-server.database.windows.net`
+        - Don't include `tcp:` prefix or port number
+        
+        **🔐 Authentication:**
+        - Use SQL Server authentication (not Windows/AAD)
+        - Ensure user has `db_datareader` permission
+        
+        **📊 Database Access:**
+        - Verify database name is correct
+        - Ensure database is online and accessible
+        
+        **🔗 Network:**
+        - Try from different network if corporate firewall blocks
+        - Check if port 1433 is open
+        """)
+    
+    # Advanced connection options
+    with st.expander("⚙️ Advanced Options", expanded=False):
+        trust_cert = st.checkbox(
+            "Trust Server Certificate", 
+            value=False,
+            help="Enable if you have certificate issues"
+        )
+        
+        connection_timeout = st.slider(
+            "Connection Timeout (seconds)", 
+            min_value=15, 
+            max_value=120, 
+            value=60,
+            help="Increase if getting timeout errors"
+        )
+    
+    # Connect button with better styling
+    st.markdown("<br>", unsafe_allow_html=True)
+    connect_button = st.button(
+        "🔗 Connect to Database",
+        type="primary",
+        use_container_width=True
     )
     
-    database = st.text_input(
-        "Database Name",
-        placeholder="your-database-name",
-        help="Name of your Azure SQL database"
-    )
-    
-    username = st.text_input(
-        "Username",
-        placeholder="your-username",
-        help="Database username"
-    )
-    
-    password = st.text_input(
-        "Password",
-        type="password",
-        help="Database password"
-    )
-    
-    # Connect button
-    if st.button("🔗 Connect to Database"):
+    if connect_button:
         if not all([gemini_api_key, server, database, username, password]):
-            st.error("Please fill in all required fields!")
+            st.error("⚠️ Please fill in all required fields!")
         else:
             # First check available drivers
             available_drivers = st.session_state.db_manager.get_available_drivers()
             if available_drivers:
-                st.info(f"Available ODBC drivers: {', '.join(available_drivers)}")
+                with st.expander("Available ODBC Drivers", expanded=False):
+                    for driver in available_drivers:
+                        st.write(f"✓ {driver}")
             else:
-                st.error("❌ No SQL Server ODBC drivers found! Please install one first.")
-                st.markdown("""
-                **To install ODBC drivers:**
-                
-                **Windows:**
-                - Download from [Microsoft](https://docs.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server)
-                
-                **macOS:**
-                ```bash
-                brew install microsoft/mssql-release/msodbcsql18
-                ```
-                
-                **Linux:**
-                ```bash
-                curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-                curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
-                sudo apt-get update
-                sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
-                ```
-                """)
+                st.error("❌ No SQL Server ODBC drivers found!")
+                with st.expander("Installation Instructions", expanded=True):
+                    st.markdown("""
+                    **Windows:**
+                    - Download from [Microsoft](https://docs.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server)
+                    
+                    **macOS:**
+                    ```bash
+                    brew install microsoft/mssql-release/msodbcsql18
+                    ```
+                    
+                    **Linux:**
+                    ```bash
+                    curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+                    curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+                    sudo apt-get update
+                    sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+                    ```
+                    """)
                 st.stop()
             
-            with st.spinner("Connecting to database..."):
+            with st.spinner("🔄 Connecting to database..."):
+                # Get advanced options
+                trust_cert_option = locals().get('trust_cert', False)
+                timeout_option = locals().get('connection_timeout', 60)
+                
                 success, message = st.session_state.db_manager.connect_to_database(
-                    server, database, username, password
+                    server, database, username, password, trust_cert_option, timeout_option
                 )
                 
                 if success:
@@ -327,133 +594,193 @@ with st.sidebar:
                     if agent_success:
                         st.session_state.connected = True
                         st.success("✅ Connected successfully!")
-                        st.info(message)  # Show which driver was used
+                        st.info(f"🔧 {message}")  # Show which driver was used
+                        st.balloons()
                     else:
                         st.error(f"❌ {agent_message}")
                 else:
                     st.error(f"❌ {message}")
     
-    # Show available drivers button 
-    #if st.button("🔍 Check Available Drivers"):
-    #    drivers = st.session_state.db_manager.get_available_drivers()
-    #    if drivers:
-    #        st.success("Available SQL Server ODBC drivers:")
-    #        for driver in drivers:
-    #            st.write(f"- {driver}")
-    #    else:
-    #        st.error("No SQL Server ODBC drivers found!")
-    #        st.info("You need to install Microsoft ODBC Driver for SQL Server.")
-    
-    # Connection status
-    if st.session_state.connected:
-        st.success("✅ Database Connected")
-        
-        # Show table information
-        # if st.button("📊 Show Table Info"):
-        #    table_info = st.session_state.db_manager.get_table_info()
-        #    st.text_area("Table Information", table_info, height=200)
-    
+    # Connection status with better styling
     st.markdown("---")
-    st.header("ℹ️ How to Use")
-    st.markdown("""
-    1. **Enter your Gemini API key**
-    2. **Fill in database connection details**
-    3. **Click 'Connect to Database'**
-    4. **Start asking questions about your data!**
-    
-    **Example questions:**
-    - "Show me all customers"
-    - "What are the top 5 products by sales?"
-    - "How many orders were placed last month?"
-    """)
-
-# Main content area
-col1, _ = st.columns([2, 1])  # only left column is used
-
-with col1:
     if st.session_state.connected:
-        st.header("💬 Chat with Your Database")
-
-        # Chat interface
-        user_question = st.text_input(
-            "Ask a question about your data:",
-            placeholder="e.g., Show me the top 10 customers by total sales",
-            key="user_input"
-        )
-
-        col_query, col_clear = st.columns([3, 1])
-
-        with col_query:
-            query_button = st.button("🚀 Query Database", type="primary")
-
-        with col_clear:
-            if st.button("🗑️ Clear"):
-                st.session_state.chat_history = []
-                st.rerun()
-
-        # Process query
-        if query_button and user_question:
-            with st.spinner("Querying database..."):
-                # Create callback handler for streaming
-                callback_handler = StreamlitCallbackHandler(st.container())
-
-                # Execute query
-                response, sql_query, results = st.session_state.sql_agent.query_database(
-                    user_question, callback_handler
-                )
-
-                # Add to chat history
-                st.session_state.chat_history.append({
-                    'question': user_question,
-                    'response': response,
-                    'sql_query': sql_query,
-                    'results': results
-                })
-
-        # Display chat history
-        if st.session_state.chat_history:
-            st.markdown("---")
-            st.header("💭 Chat History")
-
-            for i, chat in enumerate(reversed(st.session_state.chat_history)):
-                with st.expander(f"Q: {chat['question']}", expanded=(i == 0)):
-                    st.markdown("**Answer:**")
-                    st.write(chat['response'])
-
-                    if chat.get('sql_query'):
-                        st.markdown("**SQL Query:**")
-                        st.code(chat['sql_query'], language='sql')
-
-                    if chat.get('results') is not None:
-                        st.markdown("**Results:**")
-                        st.dataframe(chat['results'])
-
+        st.markdown("""
+        <div class="connection-status connected">
+            ✅ Database Connected
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.info("👈 Please configure your API key and database connection in the sidebar to get started.")
-
-        # Show example questions
-        st.header("📝 Example Questions You Can Ask")
+        st.markdown("""
+        <div class="connection-status disconnected">
+            ❌ Database Disconnected
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Help section
+    st.markdown("---")
+    st.markdown('<div class="sidebar-header">ℹ️ How to Use</div>', unsafe_allow_html=True)
+    
+    with st.expander("📋 Step-by-step Guide", expanded=False):
+        st.markdown("""
+        1. **🔑 Enter your Gemini API key**
+        2. **🔗 Fill in database connection details**
+        3. **🚀 Click 'Connect to Database'**
+        4. **💬 Start asking questions about your data!**
+        """)
+    
+    with st.expander("💡 Example Questions", expanded=False):
         examples = [
-            "Show me all tables in the database",
-            "What are the column names in the customers table?",
-            "How many records are in each table?",
-            "Show me the top 5 customers by total purchase amount",
-            "What products were sold last month?",
-            "Calculate the average order value",
-            "Show me sales by region",
-            "List all orders from the last 30 days"
+            "Show me all customers",
+            "What are the top 5 products by sales?",
+            "How many orders were placed last month?",
+            "Calculate average order value",
+            "Show sales by region"
         ]
-
         for example in examples:
-            st.code(example, language=None)
+            st.markdown(f"• {example}")
 
-# Footer
-st.markdown("---")
-st.markdown(
-    """
-    <div style="text-align: center; color: #666;">
-        Built with ❤️ using Streamlit, LangChain, and Google Gemini
+# Enhanced Main content area
+if st.session_state.connected:
+    # Chat interface with better formatting
+    st.markdown('<div class="sub-header">💬 Chat with Your Database</div>', unsafe_allow_html=True)
+    
+    # Query input with enhanced styling
+    with st.container():
+        col1, col2 = st.columns([4, 1])
+        
+        with col1:
+            user_question = st.text_input(
+                "",
+                placeholder="💭 Ask a question about your data... (e.g., Show me the top 10 customers by total sales)",
+                key="user_input",
+                label_visibility="collapsed"
+            )
+        
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            query_button = st.button("🚀 Query", type="primary", use_container_width=True)
+    
+    # Action buttons
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        if st.button("🗑️ Clear History", use_container_width=True):
+            st.session_state.chat_history = []
+            st.rerun()
+    
+    with col2:
+        if st.button("📊 Table Info", use_container_width=True):
+            with st.expander("Database Table Information", expanded=True):
+                table_info = st.session_state.db_manager.get_table_info()
+                st.text_area("", table_info, height=300, label_visibility="collapsed")
+
+    # Process query
+    if query_button and user_question:
+        with st.spinner("🔍 Querying database..."):
+            # Create callback handler for streaming
+            callback_container = st.container()
+            callback_handler = StreamlitCallbackHandler(callback_container)
+
+            # Execute query
+            response, sql_query, results = st.session_state.sql_agent.query_database(
+                user_question, callback_handler
+            )
+
+            # Add to chat history
+            st.session_state.chat_history.append({
+                'question': user_question,
+                'response': response,
+                'sql_query': sql_query,
+                'results': results,
+                'timestamp': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+
+    # Enhanced Chat history display
+    if st.session_state.chat_history:
+        st.markdown("---")
+        st.markdown('<div class="sub-header">💭 Chat History</div>', unsafe_allow_html=True)
+
+        for i, chat in enumerate(reversed(st.session_state.chat_history)):
+            with st.expander(
+                f"🔍 {chat['question'][:60]}{'...' if len(chat['question']) > 60 else ''}", 
+                expanded=(i == 0)
+            ):
+                # Timestamp
+                st.caption(f"🕒 {chat.get('timestamp', 'Unknown time')}")
+                
+                # Question
+                st.markdown(f"""
+                <div class="chat-question">
+                    <strong>❓ Question:</strong><br>
+                    {chat['question']}
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Answer
+                st.markdown(f"""
+                <div class="chat-answer">
+                    <strong>💡 Answer:</strong><br>
+                    {chat['response']}
+                </div>
+                """, unsafe_allow_html=True)
+
+                if chat.get('sql_query'):
+                    st.markdown("**🔧 SQL Query:**")
+                    st.code(chat['sql_query'], language='sql')
+
+                if chat.get('results') is not None:
+                    st.markdown("**📊 Results:**")
+                    st.dataframe(chat['results'], use_container_width=True)
+
+else:
+    # Welcome screen with better formatting
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                border-radius: 10px; color: white; margin: 2rem 0;">
+        <h2>👋 Welcome to SQL AI Agent</h2>
+        <p>Configure your API key and database connection in the sidebar to get started</p>
     </div>
-    """,
-    unsafe_allow_html=True
-)
+    """, unsafe_allow_html=True)
+
+    # Enhanced example questions
+    st.markdown('<div class="sub-header">📝 Example Questions You Can Ask</div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    examples_left = [
+        "Show me all tables in the database",
+        "What are the column names in the customers table?",
+        "How many records are in each table?",
+        "Show me the top 5 customers by total purchase amount"
+    ]
+    
+    examples_right = [
+        "What products were sold last month?",
+        "Calculate the average order value",
+        "Show me sales by region",
+        "List all orders from the last 30 days"
+    ]
+    
+    with col1:
+        for example in examples_left:
+            st.markdown(f"""
+            <div class="example-question">
+                💡 {example}
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        for example in examples_right:
+            st.markdown(f"""
+            <div class="example-question">
+                💡 {example}
+            </div>
+            """, unsafe_allow_html=True)
+
+# Enhanced Footer
+st.markdown("---")
+st.markdown("""
+<div class="footer">
+    <p>Built with ❤️ using <strong>Streamlit</strong>, <strong>LangChain</strong>, and <strong>Google Gemini</strong></p>
+    <p>🚀 Transform your data queries with the power of AI</p>
+</div>
+""", unsafe_allow_html=True)
