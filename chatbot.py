@@ -462,42 +462,48 @@ class SQLAgent:
             
             # Enhanced custom prompt for better SQL generation
             enhanced_prompt = """
-You are an expert SQL assistant for Azure SQL Database. Your job is to answer questions by writing and executing SQL queries.
+    You are an expert SQL assistant for Azure SQL Database. Your job is to answer questions by writing and executing SQL queries.
 
-CRITICAL RULES:
-1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, SalesLT.Product)
-2. NEVER use just table names without schema (e.g., don't use "Customer", use "SalesLT.Customer")
-3. When asked to "list all tables", query INFORMATION_SCHEMA.TABLES to show all available tables
-4. Use square brackets around column names that might have spaces: [Column Name]
-5. For Azure SQL, use TOP instead of LIMIT for row limiting
-6. Be careful about case sensitivity in schema and table names
+    CRITICAL RULES:
+    1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, SalesLT.Product)
+    2. NEVER use just table names without schema (e.g., don't use "Customer", use "SalesLT.Customer")
+    3. When asked to "list all tables", query INFORMATION_SCHEMA.TABLES to show all available tables
+    4. Use square brackets around column names that might have spaces: [Column Name]
+    5. For Azure SQL, use TOP instead of LIMIT for row limiting
+    6. Be careful about case sensitivity in schema and table names
 
-QUERY EXAMPLES:
-- To list all tables: "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
-- To count customers: "SELECT COUNT(*) FROM SalesLT.Customer"
-- To show table structure: "SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'SalesLT' AND TABLE_NAME = 'Customer'"
+    QUERY EXAMPLES:
+    - To list all tables: "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
+    - To count customers: "SELECT COUNT(*) FROM SalesLT.Customer"
+    - To show table structure: "SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'SalesLT' AND TABLE_NAME = 'Customer'"
 
-When you need to explore the database structure:
-1. First check INFORMATION_SCHEMA.TABLES to see available tables
-2. Use INFORMATION_SCHEMA.COLUMNS to understand table structure  
-3. Then write your query using the correct schema.table format
+    When you need to explore the database structure:
+    1. First check INFORMATION_SCHEMA.TABLES to see available tables
+    2. Use INFORMATION_SCHEMA.COLUMNS to understand table structure  
+    3. Then write your query using the correct schema.table format
 
-IMPORTANT: If a query fails because of table name issues, try checking the exact table names first using INFORMATION_SCHEMA queries.
+    IMPORTANT: If a query fails because of table name issues, try checking the exact table names first using INFORMATION_SCHEMA queries.
 
-Use this format for responses:
-Question: [the user's question]
-Thought: [your reasoning about what query to write]
-Action: [the tool to use]
-Action Input: [the query or command]
-Observation: [the result]
-Thought: [your analysis of the result]
-Final Answer: [your answer to the user]
+    Use this format for responses:
+    Question: [the user's question]
+    Thought: [your reasoning about what query to write]
+    Action: [the tool to use]
+    Action Input: [the query or command]
+    Observation: [the result]
+    Thought: [your analysis of the result]
+    Final Answer: [your answer to the user]
 
-{table_info}
+    {table_info}
 
-Question: {input}
-{agent_scratchpad}
+    Question: {input}
+    {agent_scratchpad}
             """
+            
+            # Create custom prompt template
+            prompt = PromptTemplate(
+                template=enhanced_prompt,
+                input_variables=["input", "agent_scratchpad", "table_info"]
+            )
             
             # Create agent with enhanced prompt
             self.agent = create_sql_agent(
@@ -507,17 +513,15 @@ Question: {input}
                 agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 handle_parsing_errors=True,
                 max_iterations=10,
-                early_stopping_method="force"
+                early_stopping_method="force",
+                prompt=prompt  # Pass the custom prompt directly
             )
-            
-            # Override the agent's prompt template
-            self.agent.agent.llm_chain.prompt.template = enhanced_prompt
             
             return True, "SQL Agent created successfully!"
         except Exception as e:
             logger.error(f"Error creating SQL agent: {str(e)}")
             return False, f"Error creating agent: {str(e)}"
-    
+        
     def query_database(self, question, callback_handler=None):
         """Query database using natural language"""
         try:
