@@ -333,9 +333,12 @@ class DatabaseManager:
             return False, f"Connection error: {str(e)}"
     
     def get_table_info(self):
-       if self.db:
+        if not self.db:
+            return "⚠️ No database connection found"
         try:
             tables = self.db.get_usable_table_names()
+            if not tables:
+                return "⚠️ No tables found in this database"
             info = []
             for table in tables:
                 schema = self.db.get_table_info([table])
@@ -343,7 +346,6 @@ class DatabaseManager:
             return "\n\n".join(info)
         except Exception as e:
             return f"Error getting table info: {str(e)}"
-        return "No database connection"
 
 
 class SQLAgent:
@@ -751,4 +753,5 @@ st.markdown("""
     <p>🚀 Transform your data queries with the power of AI</p>
 </div>
 """, unsafe_allow_html=True)
+
 
