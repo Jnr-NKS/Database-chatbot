@@ -460,7 +460,22 @@ class SQLAgent:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Enhanced custom prompt for better SQL generation
+            # Get the default prompt from the toolkit and modify it
+            agent_executor = create_sql_agent(
+                llm=self.llm,
+                toolkit=toolkit,
+                verbose=True,
+                agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+                handle_parsing_errors=True,
+                max_iterations=10,
+                early_stopping_method="force",
+                return_intermediate_steps=True
+            )
+            
+            # Get the original prompt to understand its structure
+            original_prompt = agent_executor.agent.llm_chain.prompt
+            
+            # Create enhanced prompt with the same variables as the original
             enhanced_prompt = """
     You are an expert SQL assistant for Azure SQL Database. Your job is to answer questions by writing and executing SQL queries.
 
@@ -484,44 +499,55 @@ class SQLAgent:
 
     IMPORTANT: If a query fails because of table name issues, try checking the exact table names first using INFORMATION_SCHEMA queries.
 
-    Use this format for responses:
-    Question: [the user's question]
-    Thought: [your reasoning about what query to write]
-    Action: [the tool to use]
-    Action Input: [the query or command]
-    Observation: [the result]
-    Thought: [your analysis of the result]
-    Final Answer: [your answer to the user]
+    {input}
 
-    {table_info}
+    Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
+    Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results.
+    You can order the results by a relevant column to return the most interesting examples in the database.
+    Never query for all the columns from a specific table, only ask for a the few relevant columns given the question.
+    You have access to tools for interacting with the database. Only use the below tools. Only use the information returned by the tools to construct your final answer.
+    You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
+
+    DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
+
+    If the question does not seem related to the database, just return "I don't know" as the answer.
+
+    Use the following format:
+
+    Question: Question here
+    Thought: You should always think about what to do
+    Action: the action to take, should be one of [{tool_names}]
+    Action Input: the input to the action
+    Observation: the result of the action
+    ... (this Thought/Action/Action Input/Observation can repeat N times)
+    Thought: I now know the final answer
+    Final Answer: the final answer to the original input question
+
+    Begin!
 
     Question: {input}
-    {agent_scratchpad}
+    Thought: I should look at the tables in the database to see what I can query.
+    Action: sql_db_list_tables
+    Action Input: ""
+    Observation: {table_info}
+    Thought: I should see the structure of the tables to understand what columns are available.
             """
             
-            # Create custom prompt template
-            prompt = PromptTemplate(
-                template=enhanced_prompt,
-                input_variables=["input", "agent_scratchpad", "table_info"]
+            # Create a new prompt with the enhanced instructions but same variables
+            new_prompt = PromptTemplate(
+                template=enhanced_prompt + original_prompt.template.split("Question: {input}")[-1],
+                input_variables=original_prompt.input_variables
             )
             
-            # Create agent with enhanced prompt
-            self.agent = create_sql_agent(
-                llm=self.llm,
-                toolkit=toolkit,
-                verbose=True,
-                agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-                handle_parsing_errors=True,
-                max_iterations=10,
-                early_stopping_method="force",
-                prompt=prompt  # Pass the custom prompt directly
-            )
+            # Update the agent's prompt
+            agent_executor.agent.llm_chain.prompt = new_prompt
+            self.agent = agent_executor
             
             return True, "SQL Agent created successfully!"
         except Exception as e:
             logger.error(f"Error creating SQL agent: {str(e)}")
             return False, f"Error creating agent: {str(e)}"
-        
+            
     def query_database(self, question, callback_handler=None):
         """Query database using natural language"""
         try:
