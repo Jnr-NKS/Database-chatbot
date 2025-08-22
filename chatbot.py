@@ -333,15 +333,24 @@ class DatabaseManager:
                 )
                 
                 # Create the database object with proper schema configuration
-                # First, let's get all schemas and tables
-                all_tables = self._get_all_schema_tables()
-                
-                self.db = SQLDatabase.from_uri(
-                    self.connection_string,
-                    include_tables=all_tables,  # Explicitly include all tables with schema
-                    sample_rows_in_table_info=3,
-                    view_support=True  # Include views as well
-                )
+                # Let LangChain auto-detect all tables without explicit include_tables
+                try:
+                    self.db = SQLDatabase.from_uri(
+                        self.connection_string,
+                        sample_rows_in_table_info=3,
+                        view_support=True,  # Include views as well
+                        custom_table_info=None,
+                        # Don't use include_tables as it's causing issues
+                    )
+                    
+                    # Test that the database object works
+                    test_tables = self.db.get_usable_table_names()
+                    logger.info(f"Successfully connected. Found tables: {test_tables}")
+                    
+                except Exception as db_error:
+                    logger.error(f"Error creating SQLDatabase object: {str(db_error)}")
+                    return False, f"Database object creation failed: {str(db_error)}"
+                    
                 return True, f"Successfully connected using driver: {used_driver}"
             else:
                 return False, message
@@ -527,22 +536,37 @@ class SQLAgent:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Create agent with custom system message for better schema handling
-            system_message = """You are an expert SQL assistant for Azure SQL Database.
+            # Get the actual table list that LangChain detected
+            try:
+                available_tables = db.get_usable_table_names()
+                table_list = ", ".join(available_tables)
+            except:
+                table_list = "various tables with schemas like SalesLT and dbo"
+            
+            # Create agent with enhanced system message
+            system_message = f"""You are an expert SQL assistant for Azure SQL Database.
 
-Important guidelines:
-1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, not just Customer)
-2. When looking for tables, check all available schemas (dbo, SalesLT, etc.)
-3. Use square brackets around column names to handle spaces: [Column Name]
-4. For Azure SQL, use TOP instead of LIMIT for row limiting
-5. Pay careful attention to the schema.table format in your queries
+IMPORTANT: The database contains tables in multiple schemas including SalesLT and dbo schemas.
 
-Available tools allow you to:
-- List all tables with their schemas
-- Get table structure and column information
-- Execute SQL queries
+Available tables include: {table_list}
 
-When asked about tables, first use the list_tables tool to see all available tables with their schemas."""
+Critical guidelines:
+1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, dbo.BuildVersion)
+2. When users ask about tables like "Customer", look for "SalesLT.Customer"
+3. Use square brackets around column names: [Column Name]
+4. For Azure SQL, use TOP instead of LIMIT
+5. When listing tables, show the schema prefix
+
+Before writing SQL queries:
+1. Use sql_db_list_tables to see all available tables
+2. Use sql_db_schema to get table structure
+3. Then write your SQL query with proper schema.table format
+
+Examples:
+- "customers" likely refers to "SalesLT.Customer"
+- "products" likely refers to "SalesLT.Product"
+- "orders" likely refers to "SalesLT.SalesOrderHeader"
+"""
             
             self.agent = create_sql_agent(
                 llm=self.llm,
@@ -550,7 +574,7 @@ When asked about tables, first use the list_tables tool to see all available tab
                 verbose=True,
                 agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 handle_parsing_errors=True,
-                max_iterations=10,
+                max_iterations=15,  # Increased for better schema exploration
                 early_stopping_method="force",
                 system_message=system_message
             )
@@ -747,6 +771,17 @@ with st.sidebar:
                         st.session_state.connected = True
                         st.success("✅ Connected successfully!")
                         st.info(f"🔧 {message}")  # Show which driver was used
+                        
+                        # Show detected tables for debugging
+                        try:
+                            detected_tables = st.session_state.db_manager.db.get_usable_table_names()
+                            with st.expander("🔍 Detected Tables", expanded=False):
+                                st.write("LangChain detected the following tables:")
+                                for table in detected_tables:
+                                    st.write(f"✓ {table}")
+                        except Exception as e:
+                            st.warning(f"Could not list detected tables: {str(e)}")
+                            
                     else:
                         st.error(f"❌ {agent_message}")
                 else:
