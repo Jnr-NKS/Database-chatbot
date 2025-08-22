@@ -333,12 +333,16 @@ class DatabaseManager:
             return False, f"Connection error: {str(e)}"
     
     def get_table_info(self):
-        """Get information about database tables"""
-        if self.db:
-            try:
-                return self.db.get_table_info()
-            except Exception as e:
-                return f"Error getting table info: {str(e)}"
+       if self.db:
+        try:
+            tables = self.db.get_usable_table_names()
+            info = []
+            for table in tables:
+                schema = self.db.get_table_info([table])
+                info.append(schema)
+            return "\n\n".join(info)
+        except Exception as e:
+            return f"Error getting table info: {str(e)}"
         return "No database connection"
 
 
@@ -747,3 +751,4 @@ st.markdown("""
     <p>🚀 Transform your data queries with the power of AI</p>
 </div>
 """, unsafe_allow_html=True)
+
