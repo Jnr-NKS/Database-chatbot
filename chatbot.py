@@ -333,25 +333,25 @@ with st.sidebar:
                 else:
                     st.error(f"❌ {message}")
     
-    # Show available drivers button
-    if st.button("🔍 Check Available Drivers"):
-        drivers = st.session_state.db_manager.get_available_drivers()
-        if drivers:
-            st.success("Available SQL Server ODBC drivers:")
-            for driver in drivers:
-                st.write(f"- {driver}")
-        else:
-            st.error("No SQL Server ODBC drivers found!")
-            st.info("You need to install Microsoft ODBC Driver for SQL Server.")
+    # Show available drivers button 
+    #if st.button("🔍 Check Available Drivers"):
+    #    drivers = st.session_state.db_manager.get_available_drivers()
+    #    if drivers:
+    #        st.success("Available SQL Server ODBC drivers:")
+    #        for driver in drivers:
+    #            st.write(f"- {driver}")
+    #    else:
+    #        st.error("No SQL Server ODBC drivers found!")
+    #        st.info("You need to install Microsoft ODBC Driver for SQL Server.")
     
     # Connection status
     if st.session_state.connected:
         st.success("✅ Database Connected")
         
         # Show table information
-        if st.button("📊 Show Table Info"):
-            table_info = st.session_state.db_manager.get_table_info()
-            st.text_area("Table Information", table_info, height=200)
+        # if st.button("📊 Show Table Info"):
+        #    table_info = st.session_state.db_manager.get_table_info()
+        #    st.text_area("Table Information", table_info, height=200)
     
     st.markdown("---")
     st.header("ℹ️ How to Use")
@@ -368,40 +368,40 @@ with st.sidebar:
     """)
 
 # Main content area
-col1, col2 = st.columns([2, 1])
+col1, _ = st.columns([2, 1])  # only left column is used
 
 with col1:
     if st.session_state.connected:
         st.header("💬 Chat with Your Database")
-        
+
         # Chat interface
         user_question = st.text_input(
             "Ask a question about your data:",
             placeholder="e.g., Show me the top 10 customers by total sales",
             key="user_input"
         )
-        
+
         col_query, col_clear = st.columns([3, 1])
-        
+
         with col_query:
             query_button = st.button("🚀 Query Database", type="primary")
-        
+
         with col_clear:
             if st.button("🗑️ Clear"):
                 st.session_state.chat_history = []
                 st.rerun()
-        
+
         # Process query
         if query_button and user_question:
             with st.spinner("Querying database..."):
                 # Create callback handler for streaming
                 callback_handler = StreamlitCallbackHandler(st.container())
-                
+
                 # Execute query
                 response, sql_query, results = st.session_state.sql_agent.query_database(
                     user_question, callback_handler
                 )
-                
+
                 # Add to chat history
                 st.session_state.chat_history.append({
                     'question': user_question,
@@ -409,28 +409,28 @@ with col1:
                     'sql_query': sql_query,
                     'results': results
                 })
-        
+
         # Display chat history
         if st.session_state.chat_history:
             st.markdown("---")
             st.header("💭 Chat History")
-            
+
             for i, chat in enumerate(reversed(st.session_state.chat_history)):
                 with st.expander(f"Q: {chat['question']}", expanded=(i == 0)):
                     st.markdown("**Answer:**")
                     st.write(chat['response'])
-                    
+
                     if chat.get('sql_query'):
                         st.markdown("**SQL Query:**")
                         st.code(chat['sql_query'], language='sql')
-                    
+
                     if chat.get('results') is not None:
                         st.markdown("**Results:**")
                         st.dataframe(chat['results'])
-    
+
     else:
         st.info("👈 Please configure your API key and database connection in the sidebar to get started.")
-        
+
         # Show example questions
         st.header("📝 Example Questions You Can Ask")
         examples = [
@@ -443,44 +443,9 @@ with col1:
             "Show me sales by region",
             "List all orders from the last 30 days"
         ]
-        
+
         for example in examples:
             st.code(example, language=None)
-
-with col2:
-    if st.session_state.connected:
-        st.header("📊 Database Overview")
-        
-        # Quick stats (you can customize this based on your database)
-        try:
-            if st.button("📈 Refresh Stats"):
-                with st.spinner("Loading database statistics..."):
-                    # You can customize these queries based on your database structure
-                    stats_query = "SELECT name FROM sys.tables WHERE type = 'U'"
-                    response, _, _ = st.session_state.sql_agent.query_database(
-                        "How many tables are in this database?"
-                    )
-                    st.info(response)
-        except Exception as e:
-            st.warning(f"Could not load stats: {str(e)}")
-    
-    else:
-        st.header("🚀 Getting Started")
-        st.markdown("""
-        This application allows you to chat with your Azure SQL database using natural language!
-        
-        **Features:**
-        - 🤖 AI-powered SQL generation
-        - 💬 Natural language queries
-        - 📊 Visual data display
-        - 🔒 Secure connections
-        - 📝 Query history
-        
-        **Requirements:**
-        - Google Gemini API key
-        - Azure SQL Database access
-        - Network connectivity to Azure
-        """)
 
 # Footer
 st.markdown("---")
@@ -492,4 +457,3 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
