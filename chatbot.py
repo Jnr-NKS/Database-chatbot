@@ -333,11 +333,13 @@ class DatabaseManager:
                 )
                 
                 # Create the database object with proper schema configuration
+                # First, let's get all schemas and tables
+                all_tables = self._get_all_schema_tables()
+                
                 self.db = SQLDatabase.from_uri(
                     self.connection_string,
-                    include_tables=None,
+                    include_tables=all_tables,  # Explicitly include all tables with schema
                     sample_rows_in_table_info=3,
-                    schema=None,  # Let it detect schemas automatically
                     view_support=True  # Include views as well
                 )
                 return True, f"Successfully connected using driver: {used_driver}"
@@ -479,6 +481,24 @@ class DatabaseManager:
                 
         except Exception as e:
             return f"❌ Error retrieving table information: {str(e)}"
+    
+    def _get_all_schema_tables(self):
+        """Get all tables with their schema prefixes for LangChain"""
+        try:
+            with self.engine.connect() as conn:
+                query = """
+                SELECT TABLE_SCHEMA, TABLE_NAME
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_TYPE = 'BASE TABLE'
+                ORDER BY TABLE_SCHEMA, TABLE_NAME
+                """
+                result = conn.execute(text(query)).fetchall()
+                
+                # Return list of fully qualified table names
+                return [f"{row[0]}.{row[1]}" for row in result]
+        except Exception as e:
+            logger.error(f"Error getting schema tables: {str(e)}")
+            return []
 
 
 class SQLAgent:
@@ -507,7 +527,23 @@ class SQLAgent:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Create agent with proper configuration - removed the problematic return_intermediate_steps
+            # Create agent with custom system message for better schema handling
+            system_message = """You are an expert SQL assistant for Azure SQL Database.
+
+Important guidelines:
+1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, not just Customer)
+2. When looking for tables, check all available schemas (dbo, SalesLT, etc.)
+3. Use square brackets around column names to handle spaces: [Column Name]
+4. For Azure SQL, use TOP instead of LIMIT for row limiting
+5. Pay careful attention to the schema.table format in your queries
+
+Available tools allow you to:
+- List all tables with their schemas
+- Get table structure and column information
+- Execute SQL queries
+
+When asked about tables, first use the list_tables tool to see all available tables with their schemas."""
+            
             self.agent = create_sql_agent(
                 llm=self.llm,
                 toolkit=toolkit,
@@ -515,7 +551,8 @@ class SQLAgent:
                 agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 handle_parsing_errors=True,
                 max_iterations=10,
-                early_stopping_method="force"
+                early_stopping_method="force",
+                system_message=system_message
             )
             
             return True, "SQL Agent created successfully!"
@@ -786,14 +823,38 @@ if st.session_state.connected:
                 table_info = st.session_state.db_manager.get_table_info()
                 st.text_area("", table_info, height=400, label_visibility="collapsed")
     
+    with col3:
+        if st.button("🔍 Debug Schema", use_container_width=True):
+            with st.expander("Schema Debug Information", expanded=True):
+                if st.session_state.db_manager.db:
+                    st.markdown("**LangChain Detected Tables:**")
+                    try:
+                        # Show what tables LangChain actually sees
+                        available_tables = st.session_state.db_manager.db.get_usable_table_names()
+                        for table in available_tables:
+                            st.write(f"✓ {table}")
+                        
+                        st.markdown("**Database Schema Info:**")
+                        schema_info = st.session_state.db_manager.db.get_table_info()
+                        st.code(schema_info, language="sql")
+                        
+                    except Exception as e:
+                        st.error(f"Error getting debug info: {str(e)}")
+                else:
+                    st.error("Database not connected")
+    
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Process query
     if query_button and user_question:
-        # Create a container for the query results
-        result_container = st.container()
+        # Add a separator and container for the current query result
+        st.markdown("---")
+        st.markdown("### 🤖 Current Query Result")
         
-        with result_container:
+        # Create a container for the immediate response
+        current_response_container = st.container()
+        
+        with current_response_container:
             with st.spinner("🔍 Querying database..."):
                 # Create callback handler for streaming
                 callback_handler = StreamlitCallbackHandler(st.container())
@@ -803,38 +864,42 @@ if st.session_state.connected:
                     user_question, callback_handler
                 )
 
-                # Display immediate result
-                if response and not response.startswith("Error"):
-                    st.success("✅ Query completed!")
-                    
-                    # Show the response in a nice format
-                    st.markdown("**🤖 AI Response:**")
-                    st.markdown(f"""
-                    <div class="chat-answer">
-                        {response}
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Show SQL query if extracted
-                    if sql_query:
-                        st.markdown("**🔧 Generated SQL Query:**")
-                        st.code(sql_query, language='sql')
-                    
-                else:
-                    st.error("❌ Query failed!")
-                    st.error(response)
+            # Display the current query and response immediately
+            st.markdown("**❓ Your Question:**")
+            st.markdown(f"""
+            <div class="chat-question">
+                {user_question}
+            </div>
+            """, unsafe_allow_html=True)
 
-                # Add to chat history
-                st.session_state.chat_history.append({
-                    'question': user_question,
-                    'response': response,
-                    'sql_query': sql_query,
-                    'results': results,
-                    'timestamp': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
+            # Display result
+            if response and not response.startswith("Error"):
+                st.markdown("**🤖 AI Response:**")
+                st.markdown(f"""
+                <div class="chat-answer">
+                    {response}
+                </div>
+                """, unsafe_allow_html=True)
                 
-        # Force a rerun to clear the input and update the display
-        st.rerun()
+                # Show SQL query if extracted
+                if sql_query:
+                    st.markdown("**🔧 Generated SQL Query:**")
+                    st.code(sql_query, language='sql')
+                
+                st.success("✅ Query completed successfully!")
+                
+            else:
+                st.error("❌ Query failed!")
+                st.error(response)
+
+            # Add to chat history
+            st.session_state.chat_history.append({
+                'question': user_question,
+                'response': response,
+                'sql_query': sql_query,
+                'results': results,
+                'timestamp': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
 
     # Enhanced Chat history display
     if st.session_state.chat_history:
