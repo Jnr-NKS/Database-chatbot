@@ -206,6 +206,7 @@ class DatabaseManager:
         self.connection_string = None
         self.timeout = 60
         self.trust_cert = False
+        self.engine = None
     
     def get_available_drivers(self):
         """Get list of available ODBC drivers"""
@@ -320,11 +321,24 @@ class DatabaseManager:
             success, message = self.test_connection(self.connection_string)
             
             if success:
+                # Store the engine for table info queries
+                self.engine = sqlalchemy.create_engine(
+                    self.connection_string,
+                    pool_pre_ping=True,
+                    pool_recycle=3600,
+                    connect_args={
+                        "timeout": self.timeout,
+                        "autocommit": True
+                    }
+                )
+                
+                # Create the database object with proper schema configuration
                 self.db = SQLDatabase.from_uri(
                     self.connection_string,
                     include_tables=None,
                     sample_rows_in_table_info=3,
-                    schema="%"
+                    schema=None,  # Let it detect schemas automatically
+                    view_support=True  # Include views as well
                 )
                 return True, f"Successfully connected using driver: {used_driver}"
             else:
@@ -333,15 +347,28 @@ class DatabaseManager:
             logger.error(f"Database connection error: {str(e)}")
             return False, f"Connection error: {str(e)}"
     
- 
-
-    def get_table_info(engine, table_name: str):
+    def get_table_info(self, table_name=None):
         """
-        Fetches column info from INFORMATION_SCHEMA for a given table.
-        Supports both fully qualified (schema.table) and short table names.
-        If schema is omitted, it searches all schemas for a matching table name.
+        Get table information from the database.
+        If table_name is provided, get info for that specific table.
+        If not provided, get info for all tables.
         """
-        with engine.connect() as conn:
+        try:
+            if not self.engine:
+                return "❌ Database not connected"
+            
+            if table_name:
+                return self._get_specific_table_info(table_name)
+            else:
+                return self._get_all_tables_info()
+                
+        except Exception as e:
+            logger.error(f"Error getting table info: {str(e)}")
+            return f"❌ Error getting table information: {str(e)}"
+    
+    def _get_specific_table_info(self, table_name):
+        """Get information for a specific table"""
+        with self.engine.connect() as conn:
             if "." in table_name:
                 schema, tbl = table_name.split(".", 1)
                 query = """
@@ -349,7 +376,9 @@ class DatabaseManager:
                     TABLE_SCHEMA,
                     TABLE_NAME,
                     COLUMN_NAME,
-                    DATA_TYPE
+                    DATA_TYPE,
+                    IS_NULLABLE,
+                    COLUMN_DEFAULT
                 FROM INFORMATION_SCHEMA.COLUMNS
                 WHERE TABLE_SCHEMA = :schema
                 AND TABLE_NAME = :table
@@ -366,7 +395,9 @@ class DatabaseManager:
                     TABLE_SCHEMA,
                     TABLE_NAME,
                     COLUMN_NAME,
-                    DATA_TYPE
+                    DATA_TYPE,
+                    IS_NULLABLE,
+                    COLUMN_DEFAULT
                 FROM INFORMATION_SCHEMA.COLUMNS
                 WHERE TABLE_NAME = :table
                 ORDER BY TABLE_SCHEMA, ORDINAL_POSITION
@@ -379,16 +410,75 @@ class DatabaseManager:
             if not result:
                 return f"❌ Table `{table_name}` not found in any schema."
 
-            # Group by schema + table
-            table_info = {}
+            # Format the result
+            info = f"📊 Table Information for {table_name}:\n\n"
+            current_table = None
+            
             for row in result:
-                schema, tbl, col, dtype = row
-                key = f"{schema}.{tbl}"
-                if key not in table_info:
-                    table_info[key] = []
-                table_info[key].append({"column": col, "type": dtype})
+                schema, tbl, col, dtype, nullable, default = row
+                table_full_name = f"{schema}.{tbl}"
+                
+                if current_table != table_full_name:
+                    if current_table is not None:
+                        info += "\n"
+                    info += f"Table: {table_full_name}\n"
+                    info += "-" * 50 + "\n"
+                    current_table = table_full_name
+                
+                nullable_str = "NULL" if nullable == "YES" else "NOT NULL"
+                default_str = f" DEFAULT: {default}" if default else ""
+                info += f"  • {col} ({dtype}) {nullable_str}{default_str}\n"
 
-            return table_info
+            return info
+    
+    def _get_all_tables_info(self):
+        """Get information for all tables in the database"""
+        try:
+            with self.engine.connect() as conn:
+                # Get all tables and views
+                query = """
+                SELECT 
+                    TABLE_SCHEMA,
+                    TABLE_NAME,
+                    TABLE_TYPE,
+                    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS 
+                     WHERE COLUMNS.TABLE_SCHEMA = TABLES.TABLE_SCHEMA 
+                     AND COLUMNS.TABLE_NAME = TABLES.TABLE_NAME) as COLUMN_COUNT
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+                ORDER BY TABLE_SCHEMA, TABLE_NAME
+                """
+                
+                result = conn.execute(text(query)).fetchall()
+                
+                if not result:
+                    return "❌ No tables found in the database."
+                
+                info = "📊 Database Tables and Views:\n\n"
+                current_schema = None
+                
+                for row in result:
+                    schema, table, table_type, column_count = row
+                    
+                    if current_schema != schema:
+                        if current_schema is not None:
+                            info += "\n"
+                        info += f"Schema: {schema}\n"
+                        info += "=" * 50 + "\n"
+                        current_schema = schema
+                    
+                    type_icon = "📋" if table_type == "BASE TABLE" else "👁️"
+                    info += f"  {type_icon} {table} ({column_count} columns)\n"
+                
+                # Add summary
+                total_tables = len([r for r in result if r[2] == 'BASE TABLE'])
+                total_views = len([r for r in result if r[2] == 'VIEW'])
+                info += f"\n📈 Summary: {total_tables} tables, {total_views} views\n"
+                
+                return info
+                
+        except Exception as e:
+            return f"❌ Error retrieving table information: {str(e)}"
 
 
 class SQLAgent:
@@ -417,33 +507,7 @@ class SQLAgent:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Custom prompt for better SQL generation
-            custom_prompt = """
-            You are an expert SQL assistant. Given an input question, create a syntactically correct SQL query to run.
-            
-            Unless the user specifies in the question a specific number of examples to obtain, query for at most 10 results using LIMIT or TOP clause.
-            Always use fully qualified table names with schema (e.g., SalesLT.SalesOrderDetail).
-            Never replace dots in table names with underscores.
-            Never query for all columns from a table. You must query only the columns that are needed to answer the question.
-            Wrap each column name in square brackets like [column_name] to handle spaces and special characters.
-            Pay attention to use only the column names you can see in the tables below. Be careful to not query for columns that do not exist.
-            Also, pay attention to which column is in which table.
-            
-            Use the following format:
-            
-            Question: "Question here"
-            SQLQuery: "SQL Query to run"
-            SQLResult: "Result of the SQLQuery"
-            Answer: "Final answer here"
-            
-            Only use the following tables:
-            {table_info}
-            
-            Question: {input}
-            {agent_scratchpad}
-            """
-            
-            # Create agent
+            # Create agent with better configuration
             self.agent = create_sql_agent(
                 llm=self.llm,
                 toolkit=toolkit,
@@ -451,7 +515,11 @@ class SQLAgent:
                 agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 handle_parsing_errors=True,
                 max_iterations=10,
-                early_stopping_method="force"
+                early_stopping_method="force",
+                # Add this to help with schema detection
+                agent_executor_kwargs={
+                    "return_intermediate_steps": True
+                }
             )
             
             return True, "SQL Agent created successfully!"
@@ -652,9 +720,6 @@ if st.session_state.connected:
     # Chat interface with better formatting
     st.markdown('<div class="sub-header">💬 Chat with Your Database</div>', unsafe_allow_html=True)
     
-    # Query input with enhanced styling - wrapped in container
-    # st.markdown('<div class="query-container">', unsafe_allow_html=True)
-    
     # Query input
     user_question = st.text_input(
         "",
@@ -679,11 +744,11 @@ if st.session_state.connected:
     with col2:
         if st.button("📊 Table Info", use_container_width=True):
             with st.expander("Database Table Information", expanded=True):
+                # Fixed: Call get_table_info without arguments to get all tables
                 table_info = st.session_state.db_manager.get_table_info()
-                st.text_area("", table_info, height=300, label_visibility="collapsed")
+                st.text_area("", table_info, height=400, label_visibility="collapsed")
     
-    st.markdown('</div>', unsafe_allow_html=True)  # Close action-buttons div
-    st.markdown('</div>', unsafe_allow_html=True)  # Close query-container div
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # Process query
     if query_button and user_question:
