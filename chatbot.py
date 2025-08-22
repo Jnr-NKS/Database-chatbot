@@ -333,19 +333,32 @@ class DatabaseManager:
             return False, f"Connection error: {str(e)}"
     
     def get_table_info(self):
-        if not self.db:
-            return "⚠️ No database connection found"
-        try:
-            tables = self.db.get_usable_table_names()
-            if not tables:
-                return "⚠️ No tables found in this database"
-            info = []
-            for table in tables:
-                schema = self.db.get_table_info([table])
-                info.append(schema)
-            return "\n\n".join(info)
-        except Exception as e:
-            return f"Error getting table info: {str(e)}"
+        """Get list of tables by querying INFORMATION_SCHEMA.TABLES directly"""
+    
+        if self.db:
+            try:
+                # Use the SQLAlchemy engine directly
+                engine = self.db._engine
+                query = """
+                    SELECT TABLE_SCHEMA, TABLE_NAME
+                    FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_TYPE = 'BASE TABLE'
+                    ORDER BY TABLE_SCHEMA, TABLE_NAME
+                """
+                with engine.connect() as conn:
+                    result = conn.execute(sqlalchemy.text(query))
+                    tables = result.fetchall()
+
+                if not tables:
+                    return "⚠️ No tables found in INFORMATION_SCHEMA.TABLES."
+
+                # Format nicely for display
+                table_list = [f"{row.TABLE_SCHEMA}.{row.TABLE_NAME}" for row in tables]
+                return "\n".join(table_list)
+
+            except Exception as e:
+                return f"❌ Error getting table info: {str(e)}"
+        return "⚠️ No database connection"
 
 
 class SQLAgent:
@@ -753,5 +766,6 @@ st.markdown("""
     <p>🚀 Transform your data queries with the power of AI</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
