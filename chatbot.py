@@ -578,7 +578,7 @@ if st.session_state.connected:
     st.markdown('<div class="sub-header">💬 Chat with Your Database</div>', unsafe_allow_html=True)
     
     # Query input with enhanced styling - wrapped in container
-    st.markdown('<div class="query-container">', unsafe_allow_html=True)
+    #st.markdown('<div class="query-container">', unsafe_allow_html=True)
     
     # Query input
     user_question = st.text_input(
@@ -721,3 +721,4 @@ st.markdown("""
     <p>🚀 Transform your data queries with the power of AI</p>
 </div>
 """, unsafe_allow_html=True)
+
