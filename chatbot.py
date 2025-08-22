@@ -595,7 +595,6 @@ with st.sidebar:
                         st.session_state.connected = True
                         st.success("✅ Connected successfully!")
                         st.info(f"🔧 {message}")  # Show which driver was used
-                        st.balloons()
                     else:
                         st.error(f"❌ {agent_message}")
                 else:
@@ -784,3 +783,4 @@ st.markdown("""
     <p>🚀 Transform your data queries with the power of AI</p>
 </div>
 """, unsafe_allow_html=True)
+
