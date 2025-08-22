@@ -14,6 +14,7 @@ from langchain_google_genai import GoogleGenerativeAI
 import sqlalchemy
 from urllib.parse import quote_plus
 import logging
+from sqlalchemy import text
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -332,33 +333,62 @@ class DatabaseManager:
             logger.error(f"Database connection error: {str(e)}")
             return False, f"Connection error: {str(e)}"
     
-    def get_table_info(self):
-        """Get list of tables by querying INFORMATION_SCHEMA.TABLES directly"""
-    
-        if self.db:
-            try:
-                # Use the SQLAlchemy engine directly
-                engine = self.db._engine
+ 
+
+    def get_table_info(engine, table_name: str):
+        """
+        Fetches column info from INFORMATION_SCHEMA for a given table.
+        Supports both fully qualified (schema.table) and short table names.
+        If schema is omitted, it searches all schemas for a matching table name.
+        """
+        with engine.connect() as conn:
+            if "." in table_name:
+                schema, tbl = table_name.split(".", 1)
                 query = """
-                    SELECT TABLE_SCHEMA, TABLE_NAME
-                    FROM INFORMATION_SCHEMA.TABLES
-                    WHERE TABLE_TYPE = 'BASE TABLE'
-                    ORDER BY TABLE_SCHEMA, TABLE_NAME
+                SELECT 
+                    TABLE_SCHEMA,
+                    TABLE_NAME,
+                    COLUMN_NAME,
+                    DATA_TYPE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = :schema
+                AND TABLE_NAME = :table
+                ORDER BY ORDINAL_POSITION
                 """
-                with engine.connect() as conn:
-                    result = conn.execute(sqlalchemy.text(query))
-                    tables = result.fetchall()
+                result = conn.execute(
+                    text(query),
+                    {"schema": schema, "table": tbl}
+                ).fetchall()
+            else:
+                # Search all schemas for the table
+                query = """
+                SELECT 
+                    TABLE_SCHEMA,
+                    TABLE_NAME,
+                    COLUMN_NAME,
+                    DATA_TYPE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = :table
+                ORDER BY TABLE_SCHEMA, ORDINAL_POSITION
+                """
+                result = conn.execute(
+                    text(query),
+                    {"table": table_name}
+                ).fetchall()
 
-                if not tables:
-                    return "⚠️ No tables found in INFORMATION_SCHEMA.TABLES."
+            if not result:
+                return f"❌ Table `{table_name}` not found in any schema."
 
-                # Format nicely for display
-                table_list = [f"{row.TABLE_SCHEMA}.{row.TABLE_NAME}" for row in tables]
-                return "\n".join(table_list)
+            # Group by schema + table
+            table_info = {}
+            for row in result:
+                schema, tbl, col, dtype = row
+                key = f"{schema}.{tbl}"
+                if key not in table_info:
+                    table_info[key] = []
+                table_info[key].append({"column": col, "type": dtype})
 
-            except Exception as e:
-                return f"❌ Error getting table info: {str(e)}"
-        return "⚠️ No database connection"
+            return table_info
 
 
 class SQLAgent:
@@ -766,6 +796,3 @@ st.markdown("""
     <p>🚀 Transform your data queries with the power of AI</p>
 </div>
 """, unsafe_allow_html=True)
-
-
-
