@@ -507,7 +507,7 @@ class SQLAgent:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Create agent with better configuration
+            # Create agent with proper configuration - removed the problematic return_intermediate_steps
             self.agent = create_sql_agent(
                 llm=self.llm,
                 toolkit=toolkit,
@@ -515,11 +515,7 @@ class SQLAgent:
                 agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 handle_parsing_errors=True,
                 max_iterations=10,
-                early_stopping_method="force",
-                # Add this to help with schema detection
-                agent_executor_kwargs={
-                    "return_intermediate_steps": True
-                }
+                early_stopping_method="force"
             )
             
             return True, "SQL Agent created successfully!"
@@ -533,16 +529,58 @@ class SQLAgent:
             if not self.agent:
                 return "Agent not initialized", None, None
             
-            # Execute query with callback handler for streaming
+            # Execute query and capture intermediate steps
             if callback_handler:
-                response = self.agent.run(question, callbacks=[callback_handler])
+                result = self.agent.invoke({"input": question}, {"callbacks": [callback_handler]})
             else:
-                response = self.agent.run(question)
+                result = self.agent.invoke({"input": question})
             
-            return response, None, None
+            # Extract the response
+            if isinstance(result, dict):
+                response = result.get("output", str(result))
+                # Try to extract SQL query from intermediate steps or agent scratchpad
+                sql_query = self._extract_sql_query(result)
+            else:
+                response = str(result)
+                sql_query = None
+            
+            return response, sql_query, None
         except Exception as e:
             logger.error(f"Query execution error: {str(e)}")
             return f"Error executing query: {str(e)}", None, None
+    
+    def _extract_sql_query(self, result):
+        """Extract SQL query from agent result"""
+        try:
+            # Try to find SQL query in intermediate steps
+            if "intermediate_steps" in result:
+                for step in result["intermediate_steps"]:
+                    if isinstance(step, tuple) and len(step) >= 2:
+                        action, observation = step[0], step[1]
+                        if hasattr(action, 'tool') and 'sql' in action.tool.lower():
+                            if hasattr(action, 'tool_input'):
+                                return action.tool_input
+            
+            # Fallback: try to extract from output text
+            output = result.get("output", "")
+            if "SELECT" in output.upper():
+                # Try to extract SQL between common delimiters
+                lines = output.split('\n')
+                sql_lines = []
+                in_sql = False
+                for line in lines:
+                    if "SELECT" in line.upper() or in_sql:
+                        in_sql = True
+                        sql_lines.append(line)
+                        if line.strip().endswith(';'):
+                            break
+                if sql_lines:
+                    return '\n'.join(sql_lines)
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error extracting SQL query: {str(e)}")
+            return None
 
 # Initialize session state
 if 'db_manager' not in st.session_state:
@@ -752,24 +790,51 @@ if st.session_state.connected:
 
     # Process query
     if query_button and user_question:
-        with st.spinner("🔍 Querying database..."):
-            # Create callback handler for streaming
-            callback_container = st.container()
-            callback_handler = StreamlitCallbackHandler(callback_container)
+        # Create a container for the query results
+        result_container = st.container()
+        
+        with result_container:
+            with st.spinner("🔍 Querying database..."):
+                # Create callback handler for streaming
+                callback_handler = StreamlitCallbackHandler(st.container())
 
-            # Execute query
-            response, sql_query, results = st.session_state.sql_agent.query_database(
-                user_question, callback_handler
-            )
+                # Execute query
+                response, sql_query, results = st.session_state.sql_agent.query_database(
+                    user_question, callback_handler
+                )
 
-            # Add to chat history
-            st.session_state.chat_history.append({
-                'question': user_question,
-                'response': response,
-                'sql_query': sql_query,
-                'results': results,
-                'timestamp': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
+                # Display immediate result
+                if response and not response.startswith("Error"):
+                    st.success("✅ Query completed!")
+                    
+                    # Show the response in a nice format
+                    st.markdown("**🤖 AI Response:**")
+                    st.markdown(f"""
+                    <div class="chat-answer">
+                        {response}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Show SQL query if extracted
+                    if sql_query:
+                        st.markdown("**🔧 Generated SQL Query:**")
+                        st.code(sql_query, language='sql')
+                    
+                else:
+                    st.error("❌ Query failed!")
+                    st.error(response)
+
+                # Add to chat history
+                st.session_state.chat_history.append({
+                    'question': user_question,
+                    'response': response,
+                    'sql_query': sql_query,
+                    'results': results,
+                    'timestamp': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+                
+        # Force a rerun to clear the input and update the display
+        st.rerun()
 
     # Enhanced Chat history display
     if st.session_state.chat_history:
@@ -800,9 +865,23 @@ if st.session_state.connected:
                 </div>
                 """, unsafe_allow_html=True)
 
+                # Show SQL query if available
                 if chat.get('sql_query'):
-                    st.markdown("**🔧 SQL Query:**")
+                    st.markdown("**🔧 Generated SQL Query:**")
                     st.code(chat['sql_query'], language='sql')
+                else:
+                    # Try to extract SQL from response text
+                    response_text = chat.get('response', '')
+                    if 'SELECT' in response_text.upper():
+                        st.markdown("**🔧 SQL Query (from response):**")
+                        # Simple extraction of SQL-like content
+                        lines = response_text.split('\n')
+                        sql_content = []
+                        for line in lines:
+                            if any(keyword in line.upper() for keyword in ['SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'INSERT', 'UPDATE', 'DELETE']):
+                                sql_content.append(line.strip())
+                        if sql_content:
+                            st.code('\n'.join(sql_content), language='sql')
 
                 if chat.get('results') is not None:
                     st.markdown("**📊 Results:**")
