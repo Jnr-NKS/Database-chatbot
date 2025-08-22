@@ -460,7 +460,7 @@ class SQLAgent:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Get the default prompt from the toolkit and modify it
+            # Create the agent with a custom prompt
             agent_executor = create_sql_agent(
                 llm=self.llm,
                 toolkit=toolkit,
@@ -472,78 +472,9 @@ class SQLAgent:
                 return_intermediate_steps=True
             )
             
-            # Get the original prompt to understand its structure
-            original_prompt = agent_executor.agent.llm_chain.prompt
-            
-            # Create enhanced prompt with the same variables as the original
-            enhanced_prompt = """
-    You are an expert SQL assistant for Azure SQL Database. Your job is to answer questions by writing and executing SQL queries.
-
-    CRITICAL RULES:
-    1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, SalesLT.Product)
-    2. NEVER use just table names without schema (e.g., don't use "Customer", use "SalesLT.Customer")
-    3. When asked to "list all tables", query INFORMATION_SCHEMA.TABLES to show all available tables
-    4. Use square brackets around column names that might have spaces: [Column Name]
-    5. For Azure SQL, use TOP instead of LIMIT for row limiting
-    6. Be careful about case sensitivity in schema and table names
-
-    QUERY EXAMPLES:
-    - To list all tables: "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
-    - To count customers: "SELECT COUNT(*) FROM SalesLT.Customer"
-    - To show table structure: "SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'SalesLT' AND TABLE_NAME = 'Customer'"
-
-    When you need to explore the database structure:
-    1. First check INFORMATION_SCHEMA.TABLES to see available tables
-    2. Use INFORMATION_SCHEMA.COLUMNS to understand table structure  
-    3. Then write your query using the correct schema.table format
-
-    IMPORTANT: If a query fails because of table name issues, try checking the exact table names first using INFORMATION_SCHEMA queries.
-
-    {input}
-
-    Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
-    Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results.
-    You can order the results by a relevant column to return the most interesting examples in the database.
-    Never query for all the columns from a specific table, only ask for a the few relevant columns given the question.
-    You have access to tools for interacting with the database. Only use the below tools. Only use the information returned by the tools to construct your final answer.
-    You MUST double check your query before executing it. If you get an error while executing a query, rewrite the query and try again.
-
-    DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
-
-    If the question does not seem related to the database, just return "I don't know" as the answer.
-
-    Use the following format:
-
-    Question: Question here
-    Thought: You should always think about what to do
-    Action: the action to take, should be one of [{tool_names}]
-    Action Input: the input to the action
-    Observation: the result of the action
-    ... (this Thought/Action/Action Input/Observation can repeat N times)
-    Thought: I now know the final answer
-    Final Answer: the final answer to the original input question
-
-    Begin!
-
-    Question: {input}
-    Thought: I should look at the tables in the database to see what I can query.
-    Action: sql_db_list_tables
-    Action Input: ""
-    Observation: {table_info}
-    Thought: I should see the structure of the tables to understand what columns are available.
-            """
-            
-            # Create a new prompt with the enhanced instructions but same variables
-            new_prompt = PromptTemplate(
-                template=enhanced_prompt + original_prompt.template.split("Question: {input}")[-1],
-                input_variables=original_prompt.input_variables
-            )
-            
-            # Update the agent's prompt
-            agent_executor.agent.llm_chain.prompt = new_prompt
             self.agent = agent_executor
-            
             return True, "SQL Agent created successfully!"
+            
         except Exception as e:
             logger.error(f"Error creating SQL agent: {str(e)}")
             return False, f"Error creating agent: {str(e)}"
