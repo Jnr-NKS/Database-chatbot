@@ -383,17 +383,16 @@ class DatabaseManager:
             success, message = self.test_connection(self.connection_string)
             
             if success:
-                # Get all tables first
-                all_tables = self.get_all_tables_and_schemas()
-                table_names = [table['full_table_name'] for table in all_tables]
-                
-                # Create SQLDatabase with specific tables and better configuration
+                # Create SQLDatabase without include_tables parameter
+                # Let it discover all tables automatically
                 self.db = SQLDatabase.from_uri(
                     self.connection_string,
-                    include_tables=table_names if table_names else None,
-                    sample_rows_in_table_info=3,
-                    custom_table_info=self.get_custom_table_info(all_tables)
+                    sample_rows_in_table_info=3
                 )
+                
+                # Get all tables to show in success message
+                all_tables = self.get_all_tables_and_schemas()
+                table_names = [table['full_table_name'] for table in all_tables]
                 
                 return True, f"Successfully connected using driver: {used_driver}. Found {len(table_names)} tables."
             else:
@@ -401,35 +400,6 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Database connection error: {str(e)}")
             return False, f"Connection error: {str(e)}"
-    
-    def get_custom_table_info(self, all_tables):
-        """Create custom table info with proper schema information"""
-        custom_info = {}
-        
-        for table in all_tables:
-            schema_name = table['schema_name']
-            table_name = table['table_name']
-            full_name = table['full_table_name']
-            
-            # Get column information
-            columns = self.get_table_columns(schema_name, table_name)
-            
-            # Create table description
-            column_descriptions = []
-            for col in columns:
-                col_desc = f"[{col['COLUMN_NAME']}] {col['DATA_TYPE']}"
-                if col['IS_NULLABLE'] == 'NO':
-                    col_desc += " NOT NULL"
-                column_descriptions.append(col_desc)
-            
-            table_description = f"""
-Table: {full_name} (Schema: {schema_name})
-Columns: {', '.join(column_descriptions)}
-            """.strip()
-            
-            custom_info[full_name] = table_description
-        
-        return custom_info
     
     def get_table_info(self):
         """Get information about database tables"""
@@ -501,21 +471,6 @@ CRITICAL RULES:
 4. Use square brackets around column names that might have spaces: [Column Name]
 5. For Azure SQL, use TOP instead of LIMIT for row limiting
 6. Be careful about case sensitivity in schema and table names
-
-AVAILABLE SCHEMAS AND TABLES:
-The database contains tables in the SalesLT schema including:
-- SalesLT.Address
-- SalesLT.Customer  
-- SalesLT.CustomerAddress
-- SalesLT.Product
-- SalesLT.ProductCategory
-- SalesLT.ProductDescription
-- SalesLT.ProductModel
-- SalesLT.ProductModelProductDescription
-- SalesLT.SalesOrderDetail
-- SalesLT.SalesOrderHeader
-- SalesLT.SalesPerson
-- SalesLT.ShoppingCart
 
 QUERY EXAMPLES:
 - To list all tables: "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
