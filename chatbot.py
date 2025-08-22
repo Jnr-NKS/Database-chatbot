@@ -214,6 +214,7 @@ class DatabaseManager:
     def __init__(self):
         self.db = None
         self.connection_string = None
+        self.engine = None
     
     def get_available_drivers(self):
         """Get list of available ODBC drivers"""
@@ -265,7 +266,7 @@ class DatabaseManager:
         """Test database connection with enhanced error handling"""
         try:
             # Create engine with additional pool settings
-            engine = sqlalchemy.create_engine(
+            self.engine = sqlalchemy.create_engine(
                 connection_string,
                 pool_pre_ping=True,
                 pool_recycle=3600,
@@ -275,7 +276,7 @@ class DatabaseManager:
                 }
             )
             
-            with engine.connect() as conn:
+            with self.engine.connect() as conn:
                 conn.execute(sqlalchemy.text("SELECT 1"))
             return True, "Connection successful!"
         except Exception as e:
@@ -311,6 +312,60 @@ class DatabaseManager:
             
             return False, f"Connection failed: {error_msg}{troubleshooting}"
     
+    def get_all_tables_and_schemas(self):
+        """Get all tables and schemas from the database"""
+        try:
+            if not self.engine:
+                return []
+            
+            # Query to get all tables with their schemas
+            query = """
+            SELECT 
+                TABLE_SCHEMA as schema_name,
+                TABLE_NAME as table_name,
+                TABLE_SCHEMA + '.' + TABLE_NAME as full_table_name
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_SCHEMA, TABLE_NAME
+            """
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(sqlalchemy.text(query))
+                tables = result.fetchall()
+                
+            return [dict(row._mapping) for row in tables]
+            
+        except Exception as e:
+            logger.error(f"Error getting tables: {str(e)}")
+            return []
+    
+    def get_table_columns(self, schema_name, table_name):
+        """Get column information for a specific table"""
+        try:
+            if not self.engine:
+                return []
+            
+            query = """
+            SELECT 
+                COLUMN_NAME,
+                DATA_TYPE,
+                IS_NULLABLE,
+                COLUMN_DEFAULT
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+            ORDER BY ORDINAL_POSITION
+            """
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(sqlalchemy.text(query), (schema_name, table_name))
+                columns = result.fetchall()
+                
+            return [dict(row._mapping) for row in columns]
+            
+        except Exception as e:
+            logger.error(f"Error getting columns for {schema_name}.{table_name}: {str(e)}")
+            return []
+    
     def connect_to_database(self, server, database, username, password, trust_cert=False, timeout=60):
         """Connect to Azure SQL Database with enhanced configuration"""
         try:
@@ -328,25 +383,82 @@ class DatabaseManager:
             success, message = self.test_connection(self.connection_string)
             
             if success:
+                # Get all tables first
+                all_tables = self.get_all_tables_and_schemas()
+                table_names = [table['full_table_name'] for table in all_tables]
+                
+                # Create SQLDatabase with specific tables and better configuration
                 self.db = SQLDatabase.from_uri(
                     self.connection_string,
-                    include_tables=None,
+                    include_tables=table_names if table_names else None,
                     sample_rows_in_table_info=3,
-                    schema="%"
-                    
+                    custom_table_info=self.get_custom_table_info(all_tables)
                 )
-                return True, f"Successfully connected using driver: {used_driver}"
+                
+                return True, f"Successfully connected using driver: {used_driver}. Found {len(table_names)} tables."
             else:
                 return False, message
         except Exception as e:
             logger.error(f"Database connection error: {str(e)}")
             return False, f"Connection error: {str(e)}"
     
+    def get_custom_table_info(self, all_tables):
+        """Create custom table info with proper schema information"""
+        custom_info = {}
+        
+        for table in all_tables:
+            schema_name = table['schema_name']
+            table_name = table['table_name']
+            full_name = table['full_table_name']
+            
+            # Get column information
+            columns = self.get_table_columns(schema_name, table_name)
+            
+            # Create table description
+            column_descriptions = []
+            for col in columns:
+                col_desc = f"[{col['COLUMN_NAME']}] {col['DATA_TYPE']}"
+                if col['IS_NULLABLE'] == 'NO':
+                    col_desc += " NOT NULL"
+                column_descriptions.append(col_desc)
+            
+            table_description = f"""
+Table: {full_name} (Schema: {schema_name})
+Columns: {', '.join(column_descriptions)}
+            """.strip()
+            
+            custom_info[full_name] = table_description
+        
+        return custom_info
+    
     def get_table_info(self):
         """Get information about database tables"""
         if self.db:
             try:
-                return self.db.get_table_info()
+                # Get basic table info from SQLDatabase
+                basic_info = self.db.get_table_info()
+                
+                # Add our custom schema information
+                all_tables = self.get_all_tables_and_schemas()
+                
+                enhanced_info = f"""
+DATABASE SCHEMA INFORMATION:
+============================
+
+Available Tables:
+{chr(10).join([f"• {table['full_table_name']}" for table in all_tables])}
+
+DETAILED TABLE INFORMATION:
+==========================
+{basic_info}
+
+IMPORTANT NOTES:
+- Always use fully qualified table names (e.g., SalesLT.Customer, not just Customer)
+- Schema names are case-sensitive
+- Use square brackets around column names with spaces: [Column Name]
+                """
+                
+                return enhanced_info
             except Exception as e:
                 return f"Error getting table info: {str(e)}"
         return "No database connection"
@@ -373,38 +485,66 @@ class SQLAgent:
             st.error(f"Error setting up Gemini LLM: {str(e)}")
     
     def create_agent(self, db):
-        """Create SQL agent"""
+        """Create SQL agent with enhanced prompt"""
         try:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Custom prompt for better SQL generation
-            custom_prompt = """
-            You are an expert SQL assistant. Given an input question, create a syntactically correct SQL query to run.
-            
-            Unless the user specifies in the question a specific number of examples to obtain, query for at most 10 results using LIMIT or TOP clause.
-            Always use fully qualified table names with schema (e.g., SalesLT.SalesOrderDetail).
-            Never replace dots in table names with underscores.
-            Never query for all columns from a table. You must query only the columns that are needed to answer the question.
-            Wrap each column name in square brackets like [column_name] to handle spaces and special characters.
-            Pay attention to use only the column names you can see in the tables below. Be careful to not query for columns that do not exist.
-            Also, pay attention to which column is in which table.
-            
-            Use the following format:
-            
-            Question: "Question here"
-            SQLQuery: "SQL Query to run"
-            SQLResult: "Result of the SQLQuery"
-            Answer: "Final answer here"
-            
-            Only use the following tables:
-            {table_info}
-            
-            Question: {input}
-            {agent_scratchpad}
+            # Enhanced custom prompt for better SQL generation
+            enhanced_prompt = """
+You are an expert SQL assistant for Azure SQL Database. Your job is to answer questions by writing and executing SQL queries.
+
+CRITICAL RULES:
+1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, SalesLT.Product)
+2. NEVER use just table names without schema (e.g., don't use "Customer", use "SalesLT.Customer")
+3. When asked to "list all tables", query INFORMATION_SCHEMA.TABLES to show all available tables
+4. Use square brackets around column names that might have spaces: [Column Name]
+5. For Azure SQL, use TOP instead of LIMIT for row limiting
+6. Be careful about case sensitivity in schema and table names
+
+AVAILABLE SCHEMAS AND TABLES:
+The database contains tables in the SalesLT schema including:
+- SalesLT.Address
+- SalesLT.Customer  
+- SalesLT.CustomerAddress
+- SalesLT.Product
+- SalesLT.ProductCategory
+- SalesLT.ProductDescription
+- SalesLT.ProductModel
+- SalesLT.ProductModelProductDescription
+- SalesLT.SalesOrderDetail
+- SalesLT.SalesOrderHeader
+- SalesLT.SalesPerson
+- SalesLT.ShoppingCart
+
+QUERY EXAMPLES:
+- To list all tables: "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
+- To count customers: "SELECT COUNT(*) FROM SalesLT.Customer"
+- To show table structure: "SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'SalesLT' AND TABLE_NAME = 'Customer'"
+
+When you need to explore the database structure:
+1. First check INFORMATION_SCHEMA.TABLES to see available tables
+2. Use INFORMATION_SCHEMA.COLUMNS to understand table structure  
+3. Then write your query using the correct schema.table format
+
+IMPORTANT: If a query fails because of table name issues, try checking the exact table names first using INFORMATION_SCHEMA queries.
+
+Use this format for responses:
+Question: [the user's question]
+Thought: [your reasoning about what query to write]
+Action: [the tool to use]
+Action Input: [the query or command]
+Observation: [the result]
+Thought: [your analysis of the result]
+Final Answer: [your answer to the user]
+
+{table_info}
+
+Question: {input}
+{agent_scratchpad}
             """
             
-            # Create agent
+            # Create agent with enhanced prompt
             self.agent = create_sql_agent(
                 llm=self.llm,
                 toolkit=toolkit,
@@ -414,6 +554,9 @@ class SQLAgent:
                 max_iterations=10,
                 early_stopping_method="force"
             )
+            
+            # Override the agent's prompt template
+            self.agent.agent.llm_chain.prompt.template = enhanced_prompt
             
             return True, "SQL Agent created successfully!"
         except Exception as e:
@@ -629,11 +772,11 @@ with st.sidebar:
     
     with st.expander("💡 Example Questions", expanded=False):
         examples = [
-            "Show me all customers",
+            "List all tables in the database",
+            "Show me all customers from SalesLT.Customer",
             "What are the top 5 products by sales?",
-            "How many orders were placed last month?",
-            "Calculate average order value",
-            "Show sales by region"
+            "How many customers are there?",
+            "Show table structure for SalesLT.Product"
         ]
         for example in examples:
             st.markdown(f"• {example}")
@@ -650,7 +793,7 @@ if st.session_state.connected:
         with col1:
             user_question = st.text_input(
                 "",
-                placeholder="💭 Ask a question about your data... (e.g., Show me the top 10 customers by total sales)",
+                placeholder="💭 Ask a question about your data... (e.g., List all tables in the database)",
                 key="user_input",
                 label_visibility="collapsed"
             )
@@ -670,7 +813,7 @@ if st.session_state.connected:
         if st.button("📊 Table Info", use_container_width=True):
             with st.expander("Database Table Information", expanded=True):
                 table_info = st.session_state.db_manager.get_table_info()
-                st.text_area("", table_info, height=300, label_visibility="collapsed")
+                st.text_area("", table_info, height=400, label_visibility="collapsed")
 
     # Process query
     if query_button and user_question:
@@ -746,17 +889,17 @@ else:
     col1, col2 = st.columns(2)
     
     examples_left = [
-        "Show me all tables in the database",
-        "What are the column names in the customers table?",
-        "How many records are in each table?",
-        "Show me the top 5 customers by total purchase amount"
+        "List all tables in the database",
+        "Show me the structure of SalesLT.Customer table",
+        "How many customers are in the database?",
+        "Show me the top 5 customers by customer ID"
     ]
     
     examples_right = [
-        "What products were sold last month?",
-        "Calculate the average order value",
-        "Show me sales by region",
-        "List all orders from the last 30 days"
+        "What products are in SalesLT.Product?",
+        "Show me all sales orders from SalesLT.SalesOrderHeader",
+        "Calculate the total number of products",
+        "List all schemas and their tables"
     ]
     
     with col1:
@@ -783,4 +926,3 @@ st.markdown("""
     <p>🚀 Transform your data queries with the power of AI</p>
 </div>
 """, unsafe_allow_html=True)
-
