@@ -14,7 +14,51 @@ from langchain_google_genai import GoogleGenerativeAI
 import sqlalchemy
 from urllib.parse import quote_plus
 import logging
-from sqlalchemy import text
+from sqlalchemy import text, inspect
+
+# Custom SQL Database class for better SQL Server schema handling
+class SQLServerDatabase(SQLDatabase):
+    """Custom SQLDatabase that better handles SQL Server schemas"""
+    
+    def get_usable_table_names(self):
+        """Get all table names including schema prefixes"""
+        inspector = inspect(self._engine)
+        table_names = []
+        
+        # Get tables from all schemas
+        for schema in inspector.get_schema_names():
+            if schema.lower() not in ['information_schema', 'sys']:  # Skip system schemas
+                for table in inspector.get_table_names(schema=schema):
+                    table_names.append(f"{schema}.{table}")
+        
+        return table_names
+    
+    def get_table_info(self, table_names=None):
+        """Get table info with proper schema handling"""
+        if table_names is None:
+            table_names = self.get_usable_table_names()
+        
+        tables_info = []
+        for table_name in table_names:
+            if '.' in table_name:
+                schema, table = table_name.split('.', 1)
+            else:
+                schema = 'dbo'
+                table = table_name
+            
+            try:
+                inspector = inspect(self._engine)
+                columns = inspector.get_columns(table, schema=schema)
+                
+                table_info = f"Table: {schema}.{table}\n"
+                for col in columns:
+                    table_info += f"  - {col['name']}: {col['type']}\n"
+                
+                tables_info.append(table_info)
+            except Exception as e:
+                tables_info.append(f"Error getting info for {table_name}: {str(e)}")
+        
+        return "\n".join(tables_info)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -332,20 +376,15 @@ class DatabaseManager:
                     }
                 )
                 
-                # Create the database object with proper schema configuration
-                # Let LangChain auto-detect all tables without explicit include_tables
+                # Create the database object with explicit schema configuration
                 try:
-                    self.db = SQLDatabase.from_uri(
-                        self.connection_string,
-                        sample_rows_in_table_info=3,
-                        view_support=True,  # Include views as well
-                        custom_table_info=None,
-                        # Don't use include_tables as it's causing issues
-                    )
+                    # Use our custom SQL Server database class
+                    engine = sqlalchemy.create_engine(self.connection_string)
+                    self.db = SQLServerDatabase(engine)
                     
-                    # Test that the database object works
+                    # Test that the database object works and log what it found
                     test_tables = self.db.get_usable_table_names()
-                    logger.info(f"Successfully connected. Found tables: {test_tables}")
+                    logger.info(f"Custom SQLServerDatabase detected tables: {test_tables}")
                     
                 except Exception as db_error:
                     logger.error(f"Error creating SQLDatabase object: {str(db_error)}")
@@ -508,6 +547,81 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error getting schema tables: {str(e)}")
             return []
+    
+    def _get_custom_table_info(self):
+        """Get custom table info for all schemas"""
+        try:
+            with self.engine.connect() as conn:
+                # Get basic table info from all schemas
+                query = """
+                SELECT 
+                    CONCAT(TABLE_SCHEMA, '.', TABLE_NAME) as full_table_name,
+                    TABLE_SCHEMA,
+                    TABLE_NAME
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_TYPE = 'BASE TABLE'
+                ORDER BY TABLE_SCHEMA, TABLE_NAME
+                """
+                result = conn.execute(text(query)).fetchall()
+                
+                custom_info = {}
+                for row in result:
+                    full_name, schema, table = row
+                    # Get column info for this table
+                    col_query = """
+                    SELECT COLUMN_NAME, DATA_TYPE
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table
+                    ORDER BY ORDINAL_POSITION
+                    """
+                    columns = conn.execute(text(col_query), {"schema": schema, "table": table}).fetchall()
+                    
+                    # Format table info string
+                    table_info = f"CREATE TABLE {full_name} (\n"
+                    col_lines = []
+                    for col_name, col_type in columns:
+                        col_lines.append(f"    [{col_name}] {col_type}")
+                    table_info += ",\n".join(col_lines)
+                    table_info += "\n)"
+                    
+                    custom_info[full_name] = table_info
+                
+                return custom_info
+        except Exception as e:
+            logger.error(f"Error getting custom table info: {str(e)}")
+            return {}
+    
+    def _get_table_schema_info(self, table_name):
+        """Get schema info for a specific table"""
+        try:
+            if '.' not in table_name:
+                return None
+                
+            schema, table = table_name.split('.', 1)
+            with self.engine.connect() as conn:
+                query = """
+                SELECT COLUMN_NAME, DATA_TYPE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table
+                ORDER BY ORDINAL_POSITION
+                """
+                result = conn.execute(text(query), {"schema": schema, "table": table}).fetchall()
+                
+                if not result:
+                    return None
+                
+                # Format as CREATE TABLE statement
+                table_info = f"CREATE TABLE {table_name} (\n"
+                col_lines = []
+                for col_name, col_type in result:
+                    col_lines.append(f"    [{col_name}] {col_type}")
+                table_info += ",\n".join(col_lines)
+                table_info += "\n)"
+                
+                return table_info
+        except Exception as e:
+            logger.error(f"Error getting table schema for {table_name}: {str(e)}")
+            return None
 
 
 class SQLAgent:
