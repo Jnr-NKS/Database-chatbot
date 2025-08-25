@@ -215,6 +215,7 @@ class DatabaseManager:
         self.db = None
         self.connection_string = None
         self.engine = None
+        self.all_tables = []
     
     def get_available_drivers(self):
         """Get list of available ODBC drivers"""
@@ -313,30 +314,115 @@ class DatabaseManager:
             return False, f"Connection failed: {error_msg}{troubleshooting}"
     
     def get_all_tables_and_schemas(self):
-        """Get all tables and schemas from the database"""
+        """Get all tables and schemas from the database with enhanced queries"""
         try:
             if not self.engine:
                 return []
             
-            # Query to get all tables with their schemas
+            # Comprehensive query to get all tables with their schemas, including views
             query = """
-            SELECT 
+            SELECT DISTINCT
                 TABLE_SCHEMA as schema_name,
                 TABLE_NAME as table_name,
-                TABLE_SCHEMA + '.' + TABLE_NAME as full_table_name
-            FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_TYPE = 'BASE TABLE'
-            ORDER BY TABLE_SCHEMA, TABLE_NAME
+                TABLE_SCHEMA + '.' + TABLE_NAME as full_table_name,
+                TABLE_TYPE as table_type,
+                (SELECT COUNT(*) 
+                 FROM INFORMATION_SCHEMA.COLUMNS c 
+                 WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA 
+                 AND c.TABLE_NAME = t.TABLE_NAME) as column_count
+            FROM INFORMATION_SCHEMA.TABLES t
+            WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+            
+            UNION ALL
+            
+            -- Get system tables that might not appear in INFORMATION_SCHEMA
+            SELECT DISTINCT
+                SCHEMA_NAME(schema_id) as schema_name,
+                name as table_name,
+                SCHEMA_NAME(schema_id) + '.' + name as full_table_name,
+                CASE type 
+                    WHEN 'U' THEN 'BASE TABLE'
+                    WHEN 'V' THEN 'VIEW'
+                    WHEN 'S' THEN 'SYSTEM TABLE'
+                    ELSE 'OTHER'
+                END as table_type,
+                0 as column_count
+            FROM sys.tables
+            WHERE is_ms_shipped = 0  -- Exclude system tables
+            
+            ORDER BY schema_name, table_name
             """
             
             with self.engine.connect() as conn:
                 result = conn.execute(sqlalchemy.text(query))
                 tables = result.fetchall()
-                
-            return [dict(row._mapping) for row in tables]
+            
+            # Convert to list of dictionaries and remove duplicates
+            table_list = []
+            seen_tables = set()
+            
+            for row in tables:
+                row_dict = dict(row._mapping)
+                table_key = (row_dict['schema_name'], row_dict['table_name'])
+                if table_key not in seen_tables:
+                    seen_tables.add(table_key)
+                    table_list.append(row_dict)
+            
+            self.all_tables = table_list
+            return table_list
             
         except Exception as e:
             logger.error(f"Error getting tables: {str(e)}")
+            # Fallback to basic query
+            try:
+                basic_query = """
+                SELECT 
+                    TABLE_SCHEMA as schema_name,
+                    TABLE_NAME as table_name,
+                    TABLE_SCHEMA + '.' + TABLE_NAME as full_table_name,
+                    'BASE TABLE' as table_type,
+                    0 as column_count
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_TYPE = 'BASE TABLE'
+                ORDER BY TABLE_SCHEMA, TABLE_NAME
+                """
+                
+                with self.engine.connect() as conn:
+                    result = conn.execute(sqlalchemy.text(basic_query))
+                    tables = result.fetchall()
+                
+                table_list = [dict(row._mapping) for row in tables]
+                self.all_tables = table_list
+                return table_list
+                
+            except Exception as e2:
+                logger.error(f"Fallback query also failed: {str(e2)}")
+                return []
+    
+    def get_all_schemas(self):
+        """Get all schemas in the database"""
+        try:
+            if not self.engine:
+                return []
+            
+            query = """
+            SELECT DISTINCT 
+                SCHEMA_NAME as schema_name,
+                COUNT(*) as table_count
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+            GROUP BY SCHEMA_NAME
+            ORDER BY schema_name
+            """
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(sqlalchemy.text(query))
+                schemas = result.fetchall()
+                
+            return [dict(row._mapping) for row in schemas]
+            
+        except Exception as e:
+            logger.error(f"Error getting schemas: {str(e)}")
             return []
     
     def get_table_columns(self, schema_name, table_name):
@@ -350,7 +436,10 @@ class DatabaseManager:
                 COLUMN_NAME,
                 DATA_TYPE,
                 IS_NULLABLE,
-                COLUMN_DEFAULT
+                COLUMN_DEFAULT,
+                CHARACTER_MAXIMUM_LENGTH,
+                NUMERIC_PRECISION,
+                NUMERIC_SCALE
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
             ORDER BY ORDINAL_POSITION
@@ -383,18 +472,32 @@ class DatabaseManager:
             success, message = self.test_connection(self.connection_string)
             
             if success:
-                # Create SQLDatabase without include_tables parameter
-                # Let it discover all tables automatically
-                self.db = SQLDatabase.from_uri(
-                    self.connection_string,
-                    sample_rows_in_table_info=3
-                )
-                
-                # Get all tables to show in success message
+                # Get all tables first
                 all_tables = self.get_all_tables_and_schemas()
-                table_names = [table['full_table_name'] for table in all_tables]
                 
-                return True, f"Successfully connected using driver: {used_driver}. Found {len(table_names)} tables."
+                if all_tables:
+                    # Get only table names for SQLDatabase (without schema prefix for include_tables)
+                    table_names = [table['full_table_name'] for table in all_tables]
+                    
+                    # Create SQLDatabase with explicit table inclusion
+                    self.db = SQLDatabase.from_uri(
+                        self.connection_string,
+                        sample_rows_in_table_info=2,
+                        include_tables=table_names,
+                        custom_table_info={
+                            table['full_table_name']: f"Schema: {table['schema_name']}, Type: {table['table_type']}"
+                            for table in all_tables
+                        }
+                    )
+                    
+                    return True, f"Successfully connected using driver: {used_driver}. Found {len(table_names)} tables across {len(set(table['schema_name'] for table in all_tables))} schemas."
+                else:
+                    # Fallback - create without explicit tables
+                    self.db = SQLDatabase.from_uri(
+                        self.connection_string,
+                        sample_rows_in_table_info=2
+                    )
+                    return True, f"Successfully connected using driver: {used_driver}. Database connection established."
             else:
                 return False, message
         except Exception as e:
@@ -402,34 +505,55 @@ class DatabaseManager:
             return False, f"Connection error: {str(e)}"
     
     def get_table_info(self):
-        """Get information about database tables"""
+        """Get comprehensive information about database tables"""
         if self.db:
             try:
-                # Get basic table info from SQLDatabase
-                basic_info = self.db.get_table_info()
-                
-                # Add our custom schema information
+                # Get all tables and schemas
                 all_tables = self.get_all_tables_and_schemas()
+                schemas = self.get_all_schemas()
                 
-                enhanced_info = f"""
-DATABASE SCHEMA INFORMATION:
-============================
-
-Available Tables:
-{chr(10).join([f"• {table['full_table_name']}" for table in all_tables])}
-
-DETAILED TABLE INFORMATION:
-==========================
-{basic_info}
-
-IMPORTANT NOTES:
-- Always use fully qualified table names (e.g., SalesLT.Customer, not just Customer)
-- Schema names are case-sensitive
-- Use square brackets around column names with spaces: [Column Name]
-                """
+                # Build comprehensive table info
+                info_parts = []
                 
-                return enhanced_info
+                # Schema summary
+                info_parts.append("DATABASE SCHEMA SUMMARY:")
+                info_parts.append("=" * 50)
+                info_parts.append(f"Total Schemas: {len(schemas)}")
+                info_parts.append(f"Total Tables: {len(all_tables)}")
+                info_parts.append("")
+                
+                # Schemas and their tables
+                info_parts.append("SCHEMAS AND TABLES:")
+                info_parts.append("=" * 50)
+                
+                for schema in schemas:
+                    schema_tables = [t for t in all_tables if t['schema_name'] == schema['schema_name']]
+                    info_parts.append(f"\n📁 Schema: {schema['schema_name']} ({len(schema_tables)} tables)")
+                    
+                    for table in schema_tables:
+                        table_type_icon = "📊" if table['table_type'] == 'BASE TABLE' else "👁️"
+                        info_parts.append(f"  {table_type_icon} {table['full_table_name']} ({table['table_type']})")
+                
+                # Get basic table info from SQLDatabase
+                try:
+                    basic_info = self.db.get_table_info()
+                    info_parts.append("\n\nDETAILED TABLE INFORMATION:")
+                    info_parts.append("=" * 50)
+                    info_parts.append(basic_info)
+                except Exception as e:
+                    logger.warning(f"Could not get detailed table info: {str(e)}")
+                
+                info_parts.append("\n\nIMPORTANT NOTES:")
+                info_parts.append("=" * 50)
+                info_parts.append("• Always use fully qualified table names (e.g., SalesLT.Customer, dbo.Users)")
+                info_parts.append("• Schema names are case-sensitive in some configurations")
+                info_parts.append("• Use square brackets for names with spaces: [Column Name]")
+                info_parts.append("• Common schemas: dbo (default), SalesLT (sample), sys (system)")
+                
+                return "\n".join(info_parts)
+                
             except Exception as e:
+                logger.error(f"Error getting comprehensive table info: {str(e)}")
                 return f"Error getting table info: {str(e)}"
         return "No database connection"
 
@@ -455,12 +579,32 @@ class SQLAgent:
             st.error(f"Error setting up Gemini LLM: {str(e)}")
     
     def create_agent(self, db):
-        """Create SQL agent with enhanced prompt"""
+        """Create SQL agent with enhanced prompt for schema awareness"""
         try:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Create the agent with a custom prompt
+            # Enhanced system prompt for better schema awareness
+            system_prompt = """
+            You are a SQL expert assistant that helps users query their database. 
+
+            IMPORTANT SCHEMA GUIDELINES:
+            1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, dbo.Users)
+            2. When listing tables, show ALL tables from ALL schemas
+            3. Pay attention to different schemas like: dbo, SalesLT, sys, etc.
+            4. Before answering, always consider what schema the tables belong to
+            5. When asked about "all tables", make sure to check all schemas, not just the default one
+
+            QUERY BEST PRACTICES:
+            1. Use proper SQL syntax for SQL Server/Azure SQL
+            2. Include schema names in all table references
+            3. When showing table lists, group by schema for clarity
+            4. Always double-check that you're querying the correct schema
+
+            If a user asks about tables, make sure to query across all schemas to give a complete picture.
+            """
+            
+            # Create the agent
             agent_executor = create_sql_agent(
                 llm=self.llm,
                 toolkit=toolkit,
@@ -469,27 +613,46 @@ class SQLAgent:
                 handle_parsing_errors=True,
                 max_iterations=10,
                 early_stopping_method="force",
-                return_intermediate_steps=True
+                return_intermediate_steps=True,
+                agent_executor_kwargs={
+                    "system_message": system_prompt
+                }
             )
             
             self.agent = agent_executor
-            return True, "SQL Agent created successfully!"
+            return True, "SQL Agent created successfully with enhanced schema awareness!"
             
         except Exception as e:
             logger.error(f"Error creating SQL agent: {str(e)}")
             return False, f"Error creating agent: {str(e)}"
             
     def query_database(self, question, callback_handler=None):
-        """Query database using natural language"""
+        """Query database using natural language with enhanced schema context"""
         try:
             if not self.agent:
                 return "Agent not initialized", None, None
             
+            # Enhance the question with schema context for table listing queries
+            enhanced_question = question
+            if "table" in question.lower() and ("all" in question.lower() or "list" in question.lower()):
+                enhanced_question = f"""
+                {question}
+                
+                IMPORTANT: Please query across ALL schemas in the database, not just the default schema. 
+                Use a query like: 
+                SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_SCHEMA + '.' + TABLE_NAME as full_name 
+                FROM INFORMATION_SCHEMA.TABLES 
+                WHERE TABLE_TYPE = 'BASE TABLE' 
+                ORDER BY TABLE_SCHEMA, TABLE_NAME
+                
+                Make sure to show tables from all schemas (dbo, SalesLT, sys, etc.) if they exist.
+                """
+            
             # Execute query with callback handler for streaming
             if callback_handler:
-                response = self.agent.run(question, callbacks=[callback_handler])
+                response = self.agent.run(enhanced_question, callbacks=[callback_handler])
             else:
-                response = self.agent.run(question)
+                response = self.agent.run(enhanced_question)
             
             return response, None, None
         except Exception as e:
@@ -667,6 +830,17 @@ with st.sidebar:
             ✅ Database Connected
         </div>
         """, unsafe_allow_html=True)
+        
+        # Show schema and table summary when connected
+        if st.session_state.db_manager.all_tables:
+            schemas = list(set(table['schema_name'] for table in st.session_state.db_manager.all_tables))
+            st.markdown(f"""
+            <div style="background: #e8f4fd; padding: 0.8rem; border-radius: 8px; margin: 0.5rem 0;">
+                <strong>📊 Database Summary:</strong><br>
+                🏢 Schemas: {len(schemas)}<br>
+                📋 Tables: {len(st.session_state.db_manager.all_tables)}
+            </div>
+            """, unsafe_allow_html=True)
     else:
         st.markdown("""
         <div class="connection-status disconnected">
@@ -688,8 +862,10 @@ with st.sidebar:
     
     with st.expander("💡 Example Questions", expanded=False):
         examples = [
-            "List all tables in the database",
-            "Show me all customers from SalesLT.Customer",
+            "Show me all tables in all schemas",
+            "List all customers from SalesLT.Customer",
+            "What tables are in the dbo schema?",
+            "Show me all schemas and their table counts",
             "What are the top 5 products by sales?",
             "How many customers are there?",
             "Show table structure for SalesLT.Product"
@@ -709,7 +885,7 @@ if st.session_state.connected:
         with col1:
             user_question = st.text_input(
                 "",
-                placeholder="💭 Ask a question about your data... (e.g., List all tables in the database)",
+                placeholder="💭 Ask a question about your data... (e.g., Show me all tables in all schemas)",
                 key="user_input",
                 label_visibility="collapsed"
             )
@@ -726,10 +902,35 @@ if st.session_state.connected:
             st.rerun()
     
     with col2:
-        if st.button("📊 Table Info", use_container_width=True):
-            with st.expander("Database Table Information", expanded=True):
+        if st.button("📊 Schema Info", use_container_width=True):
+            with st.expander("Complete Database Schema Information", expanded=True):
                 table_info = st.session_state.db_manager.get_table_info()
-                st.text_area("", table_info, height=400, label_visibility="collapsed")
+                st.text_area("", table_info, height=600, label_visibility="collapsed")
+    
+    # Quick schema overview
+    if st.session_state.db_manager.all_tables:
+        with st.expander("📋 Quick Schema Overview", expanded=False):
+            schemas_df = pd.DataFrame(st.session_state.db_manager.all_tables)
+            if not schemas_df.empty:
+                # Group by schema
+                schema_summary = schemas_df.groupby('schema_name').agg({
+                    'table_name': 'count',
+                    'table_type': lambda x: x.value_counts().to_dict()
+                }).reset_index()
+                schema_summary.columns = ['Schema', 'Table Count', 'Table Types']
+                
+                st.markdown("**Schema Summary:**")
+                for _, row in schema_summary.iterrows():
+                    st.write(f"**{row['Schema']}**: {row['Table Count']} tables")
+                
+                st.markdown("**All Tables:**")
+                # Display tables grouped by schema
+                for schema in schemas_df['schema_name'].unique():
+                    schema_tables = schemas_df[schemas_df['schema_name'] == schema]
+                    st.markdown(f"**📁 {schema}:**")
+                    for _, table in schema_tables.iterrows():
+                        table_type_icon = "📊" if table['table_type'] == 'BASE TABLE' else "👁️"
+                        st.write(f"  {table_type_icon} {table['full_table_name']}")
 
     # Process query
     if query_button and user_question:
@@ -794,8 +995,9 @@ else:
     st.markdown("""
     <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                 border-radius: 10px; color: white; margin: 2rem 0;">
-        <h2>👋 Welcome to SQL AI Agent</h2>
+        <h2>👋 Welcome to Enhanced SQL AI Agent</h2>
         <p>Configure your API key and database connection in the sidebar to get started</p>
+        <p><strong>🔍 Now with complete schema discovery across all database schemas!</strong></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -805,17 +1007,19 @@ else:
     col1, col2 = st.columns(2)
     
     examples_left = [
-        "List all tables in the database",
+        "Show me all tables in all schemas",
+        "List all tables in the SalesLT schema",
+        "What schemas exist in this database?",
         "Show me the structure of SalesLT.Customer table",
-        "How many customers are in the database?",
-        "Show me the top 5 customers by customer ID"
+        "How many customers are in the database?"
     ]
     
     examples_right = [
+        "What tables are in the dbo schema?",
+        "Show me all views in the database",
+        "List all schemas with their table counts",
         "What products are in SalesLT.Product?",
-        "Show me all sales orders from SalesLT.SalesOrderHeader",
-        "Calculate the total number of products",
-        "List all schemas and their tables"
+        "Calculate the total number of products"
     ]
     
     with col1:
@@ -834,11 +1038,41 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
+    # Feature highlights
+    st.markdown("---")
+    st.markdown('<div class="sub-header">🚀 Enhanced Features</div>', unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("""
+        <div class="card">
+            <h4>🔍 Complete Schema Discovery</h4>
+            <p>Automatically discovers all tables across all schemas in your database, not just the default schema.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div class="card">
+            <h4>🧠 Smart Query Understanding</h4>
+            <p>Enhanced AI agent that understands schema context and generates accurate cross-schema queries.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown("""
+        <div class="card">
+            <h4>📊 Comprehensive Insights</h4>
+            <p>Get detailed information about schemas, tables, views, and their relationships.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
 # Enhanced Footer
 st.markdown("---")
 st.markdown("""
 <div class="footer">
     <p>Built with ❤️ using <strong>Streamlit</strong>, <strong>LangChain</strong>, and <strong>Google Gemini</strong></p>
-    <p>🚀 Transform your data queries with the power of AI</p>
+    <p>🚀 Transform your data queries with the power of AI - Now with complete schema awareness!</p>
 </div>
 """, unsafe_allow_html=True)
