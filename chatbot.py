@@ -836,13 +836,63 @@ class SQLAgent:
                     Make sure to show tables from all schemas (dbo, SalesLT, sys, etc.) if they exist.
                     """
             
-            # Execute query with callback handler for streaming
-            if callback_handler:
-                response = self.agent.run(enhanced_question, callbacks=[callback_handler])
-            else:
-                response = self.agent.run(enhanced_question)
+            # Execute query with the newer invoke method
+            try:
+                if callback_handler:
+                    response = self.agent.invoke(
+                        {"input": enhanced_question},
+                        {"callbacks": [callback_handler]}
+                    )
+                else:
+                    response = self.agent.invoke({"input": enhanced_question})
+                
+                # Extract the output from the response
+                if isinstance(response, dict):
+                    if "output" in response:
+                        return response["output"], None, None
+                    elif "result" in response:
+                        return response["result"], None, None
+                    else:
+                        return str(response), None, None
+                else:
+                    return str(response), None, None
+                    
+            except Exception as invoke_error:
+                logger.error(f"Invoke method failed: {str(invoke_error)}")
+                
+                # Fallback to direct query execution using our database connection
+                try:
+                    # For table listing queries, execute directly
+                    if "saleslt" in question.lower() and "table" in question.lower():
+                        with st.session_state.db_manager.engine.connect() as conn:
+                            query = """
+                            SELECT 
+                                TABLE_SCHEMA as [Schema],
+                                TABLE_NAME as [Table_Name], 
+                                TABLE_TYPE as [Type]
+                            FROM INFORMATION_SCHEMA.TABLES 
+                            WHERE TABLE_SCHEMA = 'SalesLT' AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+                            ORDER BY TABLE_NAME
+                            """
+                            result = conn.execute(sqlalchemy.text(query))
+                            rows = result.fetchall()
+                            
+                            if rows:
+                                response_text = "Tables in SalesLT schema:\n\n"
+                                for row in rows:
+                                    row_dict = dict(row._mapping)
+                                    table_type_icon = "📊" if row_dict['Type'] == 'BASE TABLE' else "👁️"
+                                    response_text += f"{table_type_icon} {row_dict['Schema']}.{row_dict['Table_Name']} ({row_dict['Type']})\n"
+                                
+                                return response_text, query, rows
+                            else:
+                                return "No tables found in SalesLT schema", query, []
+                    
+                    return f"Query execution failed with invoke method: {str(invoke_error)}", None, None
+                    
+                except Exception as fallback_error:
+                    return f"Both invoke and fallback methods failed: {str(invoke_error)} | {str(fallback_error)}", None, None
             
-            return response, None, None
         except Exception as e:
             logger.error(f"Query execution error: {str(e)}")
             return f"Error executing query: {str(e)}", None, None
