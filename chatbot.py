@@ -16,6 +16,7 @@ from urllib.parse import quote_plus
 from langchain.tools import BaseTool
 from typing import Optional, Type
 from pydantic import BaseModel, Field
+import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
