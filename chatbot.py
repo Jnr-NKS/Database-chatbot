@@ -13,7 +13,9 @@ import google.generativeai as genai
 from langchain_google_genai import GoogleGenerativeAI
 import sqlalchemy
 from urllib.parse import quote_plus
-import logging
+from langchain.tools import BaseTool
+from typing import Optional, Type
+from pydantic import BaseModel, Field
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -472,42 +474,73 @@ class DatabaseManager:
             success, message = self.test_connection(self.connection_string)
             
             if success:
-                # Get all tables first
+                # Get all tables first using our enhanced discovery
                 all_tables = self.get_all_tables_and_schemas()
                 
-                # Create SQLDatabase without include_tables to let it auto-discover
-                # This is more reliable than manually specifying tables
+                # Filter to only include base tables (not views) for better compatibility
+                base_tables = [table for table in all_tables if table['table_type'] == 'BASE TABLE']
+                
                 try:
-                    self.db = SQLDatabase.from_uri(
-                        self.connection_string,
-                        sample_rows_in_table_info=2,
-                        # Remove include_tables parameter to avoid compatibility issues
-                        # Let SQLDatabase discover tables automatically
-                        view_support=True  # Enable view support if available
-                    )
+                    # Try to include only the base tables that we know exist
+                    if base_tables:
+                        table_names = [table['full_table_name'] for table in base_tables]
+                        
+                        # Create SQLDatabase with explicit table inclusion for base tables
+                        self.db = SQLDatabase.from_uri(
+                            self.connection_string,
+                            sample_rows_in_table_info=2,
+                            include_tables=table_names  # Only include base tables we confirmed exist
+                        )
+                        
+                        logger.info(f"Successfully included {len(table_names)} base tables: {table_names}")
+                    else:
+                        # Fallback to auto-discovery if no tables found
+                        self.db = SQLDatabase.from_uri(
+                            self.connection_string,
+                            sample_rows_in_table_info=2
+                        )
                     
-                    # Store our enhanced table info separately for reference
+                    # Store our enhanced table info for reference
                     self.all_tables = all_tables
                     
-                    # Test the database connection by getting table info
+                    # Verify the connection works by testing table access
                     try:
-                        basic_table_info = self.db.get_table_info()
-                        logger.info(f"SQLDatabase successfully created with auto-discovery")
+                        test_info = self.db.get_table_info()
+                        logger.info(f"SQLDatabase table info length: {len(test_info)}")
+                        
+                        # Check if our target tables are accessible
+                        if 'SalesLT.Customer' in str(test_info) or 'Customer' in str(test_info):
+                            logger.info("SalesLT.Customer table is accessible")
+                        else:
+                            logger.warning("SalesLT.Customer table may not be accessible to LangChain")
+                            
                     except Exception as e:
-                        logger.warning(f"Table info retrieval warning: {str(e)}")
+                        logger.warning(f"Table info test failed: {str(e)}")
                     
-                    return True, f"Successfully connected using driver: {used_driver}. Found {len(all_tables)} tables across {len(set(table['schema_name'] for table in all_tables))} schemas."
+                    return True, f"Successfully connected using driver: {used_driver}. Found {len(all_tables)} tables ({len(base_tables)} base tables) across {len(set(table['schema_name'] for table in all_tables))} schemas."
                     
-                except Exception as e:
-                    logger.error(f"SQLDatabase creation failed: {str(e)}")
-                    # Try with minimal configuration as fallback
+                except Exception as db_error:
+                    logger.error(f"SQLDatabase creation failed with include_tables: {str(db_error)}")
+                    
+                    # Try without include_tables as final fallback
                     try:
                         self.db = SQLDatabase.from_uri(
                             self.connection_string,
-                            sample_rows_in_table_info=1
+                            sample_rows_in_table_info=2
                         )
                         self.all_tables = all_tables
-                        return True, f"Successfully connected using driver: {used_driver} (basic mode). Found {len(all_tables)} tables across {len(set(table['schema_name'] for table in all_tables))} schemas."
+                        
+                        # Test if we can access SalesLT tables directly
+                        try:
+                            with self.engine.connect() as conn:
+                                test_query = "SELECT TOP 1 * FROM SalesLT.Customer"
+                                conn.execute(sqlalchemy.text(test_query))
+                                logger.info("Direct access to SalesLT.Customer confirmed")
+                        except Exception as direct_test_error:
+                            logger.error(f"Direct SalesLT.Customer access failed: {str(direct_test_error)}")
+                        
+                        return True, f"Successfully connected using driver: {used_driver} (auto-discovery mode). Found {len(all_tables)} tables across {len(set(table['schema_name'] for table in all_tables))} schemas."
+                        
                     except Exception as e2:
                         return False, f"Failed to create SQLDatabase: {str(e2)}"
             else:
@@ -570,6 +603,52 @@ class DatabaseManager:
         return "No database connection"
 
 
+# Custom tool for enhanced table discovery
+class EnhancedTableListTool(BaseTool):
+    name: str = "enhanced_table_list"
+    description: str = """
+    Use this tool to get a comprehensive list of ALL tables across ALL schemas in the database.
+    This tool provides complete schema information that may not be available through standard SQL tools.
+    Input should be empty string or 'all' to get all tables.
+    """
+    
+    def _run(self, query: str = "") -> str:
+        """Get comprehensive table list from our enhanced discovery"""
+        try:
+            if hasattr(st.session_state, 'db_manager') and st.session_state.db_manager.all_tables:
+                all_tables = st.session_state.db_manager.all_tables
+                
+                result = "COMPLETE TABLE LIST ACROSS ALL SCHEMAS:\n"
+                result += "=" * 50 + "\n"
+                
+                # Group by schema
+                schemas = {}
+                for table in all_tables:
+                    schema = table['schema_name']
+                    if schema not in schemas:
+                        schemas[schema] = []
+                    schemas[schema].append(table)
+                
+                for schema_name, tables in schemas.items():
+                    result += f"\n{schema_name} Schema ({len(tables)} tables):\n"
+                    for table in tables:
+                        result += f"  ✓ {table['full_table_name']} ({table['table_type']})\n"
+                
+                result += f"\nTotal: {len(all_tables)} tables across {len(schemas)} schemas\n"
+                result += "\nNOTE: Always use fully qualified names (schema.table) in your queries!\n"
+                
+                return result
+            else:
+                return "Enhanced table discovery not available. Use standard SQL queries."
+                
+        except Exception as e:
+            return f"Error getting enhanced table list: {str(e)}"
+    
+    def _arun(self, query: str = "") -> str:
+        """Async version"""
+        return self._run(query)
+
+
 class SQLAgent:
     def __init__(self, gemini_api_key):
         self.gemini_api_key = gemini_api_key
@@ -591,48 +670,97 @@ class SQLAgent:
             st.error(f"Error setting up Gemini LLM: {str(e)}")
     
     def create_agent(self, db):
-        """Create SQL agent with enhanced prompt for schema awareness"""
+        """Create SQL agent with enhanced prompt for schema awareness and custom tools"""
         try:
             # Create SQL toolkit
             toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
             
-            # Enhanced system prompt for better schema awareness
-            system_prompt = """
-            You are a SQL expert assistant that helps users query their database. 
+            # Add our custom enhanced table discovery tool
+            enhanced_table_tool = EnhancedTableListTool()
+            
+            # Get all tools from toolkit and add our custom one
+            tools = toolkit.get_tools()
+            tools.append(enhanced_table_tool)
+            
+            # Get comprehensive table information from our database manager
+            if hasattr(st.session_state, 'db_manager') and st.session_state.db_manager.all_tables:
+                all_tables_info = st.session_state.db_manager.all_tables
+                
+                # Build a comprehensive table list for the system prompt
+                table_list = "AVAILABLE TABLES IN DATABASE:\n"
+                table_list += "=" * 50 + "\n"
+                
+                # Group by schema
+                schemas = {}
+                for table in all_tables_info:
+                    schema = table['schema_name']
+                    if schema not in schemas:
+                        schemas[schema] = []
+                    schemas[schema].append(table)
+                
+                for schema_name, tables in schemas.items():
+                    table_list += f"\n{schema_name} Schema:\n"
+                    for table in tables:
+                        table_list += f"  - {table['full_table_name']} ({table['table_type']})\n"
+                
+                table_list += "\nIMPORTANT: All table names must include the schema prefix (e.g., SalesLT.Customer, dbo.BuildVersion)\n"
+            else:
+                table_list = "Please use fully qualified table names with schema prefix.\n"
+            
+            # Enhanced system prompt with complete table information
+            system_prompt = f"""
+            You are a SQL expert assistant that helps users query their Azure SQL database.
 
-            IMPORTANT SCHEMA GUIDELINES:
-            1. ALWAYS use fully qualified table names with schema (e.g., SalesLT.Customer, dbo.Users)
-            2. When listing tables, show ALL tables from ALL schemas
-            3. Pay attention to different schemas like: dbo, SalesLT, sys, etc.
-            4. Before answering, always consider what schema the tables belong to
-            5. When asked about "all tables", make sure to check all schemas, not just the default one
+            {table_list}
 
-            QUERY BEST PRACTICES:
-            1. Use proper SQL syntax for SQL Server/Azure SQL
-            2. Include schema names in all table references
-            3. When showing table lists, group by schema for clarity
-            4. Always double-check that you're querying the correct schema
+            CRITICAL SQL GUIDELINES:
+            1. ALWAYS use fully qualified table names with schema prefix (e.g., SalesLT.Customer, NOT just Customer)
+            2. The database contains tables in multiple schemas: dbo, SalesLT, sys
+            3. Common tables include:
+               - SalesLT.Customer (customer information)
+               - SalesLT.Product (product catalog)  
+               - SalesLT.SalesOrderHeader (sales orders)
+               - SalesLT.Address (addresses)
+               - dbo.BuildVersion, dbo.ErrorLog (system tables)
+            4. When querying, always specify the schema name
+            5. Use proper SQL Server syntax
 
-            If a user asks about tables, make sure to query across all schemas to give a complete picture.
+            AVAILABLE TOOLS:
+            - Use 'enhanced_table_list' tool to get complete table information across all schemas
+            - Use standard SQL tools for querying data
+            - If standard tools don't show a table, use enhanced_table_list to verify it exists
+
+            QUERY EXECUTION RULES:
+            1. If you can't find SalesLT.Customer with standard tools, use enhanced_table_list first
+            2. For customer counts, use: SELECT COUNT(*) FROM SalesLT.Customer
+            3. For listing tables, try enhanced_table_list first, then standard SQL queries
+            4. Always validate table existence using enhanced_table_list if queries fail
+
+            SCHEMA HANDLING:
+            - If you get "table not found" errors, use enhanced_table_list to see all available tables
+            - Try SalesLT schema first for business data, dbo for system data
+            - Never assume a table is in the default schema without the prefix
             """
             
-            # Create the agent
-            agent_executor = create_sql_agent(
+            # Create the agent with all tools including our custom one
+            from langchain.agents import initialize_agent
+            
+            agent_executor = initialize_agent(
+                tools=tools,
                 llm=self.llm,
-                toolkit=toolkit,
+                agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 verbose=True,
-                agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
                 handle_parsing_errors=True,
                 max_iterations=10,
                 early_stopping_method="force",
                 return_intermediate_steps=True,
-                agent_executor_kwargs={
-                    "system_message": system_prompt
+                agent_kwargs={
+                    "prefix": system_prompt
                 }
             )
             
             self.agent = agent_executor
-            return True, "SQL Agent created successfully with enhanced schema awareness!"
+            return True, "SQL Agent created successfully with enhanced schema awareness and custom tools!"
             
         except Exception as e:
             logger.error(f"Error creating SQL agent: {str(e)}")
