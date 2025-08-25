@@ -475,29 +475,41 @@ class DatabaseManager:
                 # Get all tables first
                 all_tables = self.get_all_tables_and_schemas()
                 
-                if all_tables:
-                    # Get only table names for SQLDatabase (without schema prefix for include_tables)
-                    table_names = [table['full_table_name'] for table in all_tables]
-                    
-                    # Create SQLDatabase with explicit table inclusion
+                # Create SQLDatabase without include_tables to let it auto-discover
+                # This is more reliable than manually specifying tables
+                try:
                     self.db = SQLDatabase.from_uri(
                         self.connection_string,
                         sample_rows_in_table_info=2,
-                        include_tables=table_names,
-                        custom_table_info={
-                            table['full_table_name']: f"Schema: {table['schema_name']}, Type: {table['table_type']}"
-                            for table in all_tables
-                        }
+                        # Remove include_tables parameter to avoid compatibility issues
+                        # Let SQLDatabase discover tables automatically
+                        view_support=True  # Enable view support if available
                     )
                     
-                    return True, f"Successfully connected using driver: {used_driver}. Found {len(table_names)} tables across {len(set(table['schema_name'] for table in all_tables))} schemas."
-                else:
-                    # Fallback - create without explicit tables
-                    self.db = SQLDatabase.from_uri(
-                        self.connection_string,
-                        sample_rows_in_table_info=2
-                    )
-                    return True, f"Successfully connected using driver: {used_driver}. Database connection established."
+                    # Store our enhanced table info separately for reference
+                    self.all_tables = all_tables
+                    
+                    # Test the database connection by getting table info
+                    try:
+                        basic_table_info = self.db.get_table_info()
+                        logger.info(f"SQLDatabase successfully created with auto-discovery")
+                    except Exception as e:
+                        logger.warning(f"Table info retrieval warning: {str(e)}")
+                    
+                    return True, f"Successfully connected using driver: {used_driver}. Found {len(all_tables)} tables across {len(set(table['schema_name'] for table in all_tables))} schemas."
+                    
+                except Exception as e:
+                    logger.error(f"SQLDatabase creation failed: {str(e)}")
+                    # Try with minimal configuration as fallback
+                    try:
+                        self.db = SQLDatabase.from_uri(
+                            self.connection_string,
+                            sample_rows_in_table_info=1
+                        )
+                        self.all_tables = all_tables
+                        return True, f"Successfully connected using driver: {used_driver} (basic mode). Found {len(all_tables)} tables across {len(set(table['schema_name'] for table in all_tables))} schemas."
+                    except Exception as e2:
+                        return False, f"Failed to create SQLDatabase: {str(e2)}"
             else:
                 return False, message
         except Exception as e:
@@ -634,19 +646,66 @@ class SQLAgent:
             
             # Enhance the question with schema context for table listing queries
             enhanced_question = question
-            if "table" in question.lower() and ("all" in question.lower() or "list" in question.lower()):
-                enhanced_question = f"""
-                {question}
+            
+            # Check if this is a question about listing tables
+            if any(keyword in question.lower() for keyword in ["table", "schema"]) and \
+               any(keyword in question.lower() for keyword in ["all", "list", "show", "what"]):
                 
-                IMPORTANT: Please query across ALL schemas in the database, not just the default schema. 
-                Use a query like: 
-                SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_SCHEMA + '.' + TABLE_NAME as full_name 
-                FROM INFORMATION_SCHEMA.TABLES 
-                WHERE TABLE_TYPE = 'BASE TABLE' 
-                ORDER BY TABLE_SCHEMA, TABLE_NAME
-                
-                Make sure to show tables from all schemas (dbo, SalesLT, sys, etc.) if they exist.
-                """
+                # Get the database manager from session state to access our enhanced table info
+                if hasattr(st.session_state, 'db_manager') and st.session_state.db_manager.all_tables:
+                    all_tables_info = st.session_state.db_manager.all_tables
+                    
+                    # Create a comprehensive context for the AI
+                    table_context = "Here are all the tables I found in the database across all schemas:\n"
+                    
+                    # Group by schema
+                    schemas = {}
+                    for table in all_tables_info:
+                        schema = table['schema_name']
+                        if schema not in schemas:
+                            schemas[schema] = []
+                        schemas[schema].append(table)
+                    
+                    # Build context string
+                    for schema_name, tables in schemas.items():
+                        table_context += f"\nSchema '{schema_name}':\n"
+                        for table in tables:
+                            table_context += f"  - {table['full_table_name']} ({table['table_type']})\n"
+                    
+                    enhanced_question = f"""
+                    {question}
+                    
+                    CONTEXT: {table_context}
+                    
+                    Please use this information to provide a comprehensive answer. When querying for tables, 
+                    make sure to use the appropriate SQL query that will show all tables across all schemas, 
+                    such as:
+                    
+                    SELECT 
+                        TABLE_SCHEMA as [Schema],
+                        TABLE_NAME as [Table Name], 
+                        TABLE_TYPE as [Type],
+                        TABLE_SCHEMA + '.' + TABLE_NAME as [Full Name]
+                    FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+                    ORDER BY TABLE_SCHEMA, TABLE_NAME
+                    
+                    Make sure your response includes all schemas (dbo, SalesLT, sys, etc.) and their tables.
+                    """
+                else:
+                    # Fallback enhancement
+                    enhanced_question = f"""
+                    {question}
+                    
+                    IMPORTANT: Please query across ALL schemas in the database, not just the default schema. 
+                    Use a comprehensive query like: 
+                    SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_SCHEMA + '.' + TABLE_NAME as full_name 
+                    FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+                    ORDER BY TABLE_SCHEMA, TABLE_NAME
+                    
+                    Make sure to show tables from all schemas (dbo, SalesLT, sys, etc.) if they exist.
+                    """
             
             # Execute query with callback handler for streaming
             if callback_handler:
